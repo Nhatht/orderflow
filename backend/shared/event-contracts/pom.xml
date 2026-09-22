@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.orderflow</groupId>
+        <artifactId>orderflow-parent</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+        <relativePath>../../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>event-contracts</artifactId>
+    <name>Shared Event Contracts</name>
+    <description>Kafka event envelope and DTOs shared across services</description>
+
+    <!--
+        ĐÂY LÀ THƯ VIỆN, KHÔNG PHẢI ỨNG DỤNG.
+        Không có spring-boot-maven-plugin ở đây — module này chỉ sinh ra .jar thường
+        để các service khác nhúng vào, không chạy độc lập được.
+
+        GIỚI HẠN BẮT BUỘC (xem docs/STRUCTURE.md):
+        chỉ để event DTO và enum. KHÔNG để entity JPA, repository,
+        business logic hay "common utils" — làm vậy là tạo ra distributed monolith.
+        Đó cũng là lý do module này CHỈ phụ thuộc Jackson, không phụ thuộc Spring.
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-annotations</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+        </dependency>
+    </dependencies>
+</project>

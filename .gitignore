@@ -1,0 +1,52 @@
+# Java / Maven
+target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+.mvn/timing.properties
+dependency-reduced-pom.xml
+
+# Node / frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+
+# IDE
+.idea/
+*.iml
+*.iws
+.vscode/
+!.vscode/extensions.json
+.settings/
+.project
+.classpath
+nbproject/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Logs & runtime
+*.log
+logs/
+pgdata/
+kafka-data/
+redis-data/
+
+# Test output
+coverage/
+.nyc_output/
+
+# Tài liệu nội bộ — không public
+docs/
+HANDOFF.md

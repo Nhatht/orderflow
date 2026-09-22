@@ -1,0 +1,202 @@
+name: orderflow
+
+services:
+
+  # ===========================================================================
+  # KAFKA — chạy KRaft mode, KHÔNG cần Zookeeper
+  # ===========================================================================
+  kafka:
+    image: confluentinc/cp-kafka:7.7.1
+    container_name: orderflow-kafka
+    ports:
+      - "29092:29092"   # cổng cho app chạy NGOÀI Docker (IntelliJ trên máy host)
+    environment:
+      # --- KRaft: node này vừa là broker vừa là controller ---
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+
+      # =====================================================================
+      # ĐÂY LÀ CHỖ AI CŨNG VẤP — đọc kỹ
+      # =====================================================================
+      # Kafka có cơ chế lạ: client kết nối lần đầu để hỏi "broker ở đâu",
+      # rồi Kafka TRẢ VỀ một địa chỉ, và client kết nối LẠI vào địa chỉ đó.
+      # Địa chỉ trả về chính là ADVERTISED_LISTENERS.
+      #
+      # Vấn đề: "kafka:9092" chỉ phân giải được BÊN TRONG mạng Docker.
+      # App chạy từ IntelliJ trên máy host không hiểu tên "kafka" là gì
+      # -> kết nối lần đầu OK, rồi treo/timeout ở lần kết nối thứ hai.
+      # Lỗi này rất khó đoán vì log không nói gì rõ ràng.
+      #
+      # Giải pháp: khai BA listener cho ba đối tượng khác nhau
+      #   INTERNAL   kafka:9092       <- service khác trong Docker gọi
+      #   EXTERNAL   localhost:29092  <- app chạy trên máy host gọi
+      #   CONTROLLER kafka:9093       <- KRaft dùng nội bộ
+      #
+      # => Trong application.yml của service chạy từ IntelliJ, dùng
+      #    bootstrap-servers: localhost:29092
+      # =====================================================================
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+
+      # --- Cấu hình cho môi trường dev 1 node ---
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"   # tự tạo topic che giấu lỗi sai tên
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # Giao diện xem topic, message, consumer group — http://localhost:8090
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: orderflow-kafka-ui
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: orderflow
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      DYNAMIC_CONFIG_ENABLED: "true"
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  # ===========================================================================
+  # REDIS — distributed lock (inventory) + rate limit (gateway) + cache
+  # ===========================================================================
+  redis:
+    image: redis:7.4-alpine
+    container_name: orderflow-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===========================================================================
+  # POSTGRESQL — MỖI SERVICE MỘT DATABASE RIÊNG
+  #
+  # Đây không phải cho vui: một container riêng cho mỗi service ép buộc
+  # nguyên tắc "không JOIN xuyên service". Nếu dùng chung một Postgres với
+  # ba schema, sớm muộn cũng có người viết JOIN qua schema khác —
+  # và thế là thành distributed monolith.
+  #
+  # Cổng khác nhau để cắm DataGrip vào cả ba cùng lúc.
+  # ===========================================================================
+  postgres-order:
+    image: postgres:16-alpine
+    container_name: orderflow-postgres-order
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: order_db
+      POSTGRES_USER: orderflow
+      POSTGRES_PASSWORD: orderflow
+    volumes:
+      - postgres-order-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orderflow -d order_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-inventory:
+    image: postgres:16-alpine
+    container_name: orderflow-postgres-inventory
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_DB: inventory_db
+      POSTGRES_USER: orderflow
+      POSTGRES_PASSWORD: orderflow
+    volumes:
+      - postgres-inventory-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orderflow -d inventory_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-payment:
+    image: postgres:16-alpine
+    container_name: orderflow-postgres-payment
+    ports:
+      - "5435:5432"
+    environment:
+      POSTGRES_DB: payment_db
+      POSTGRES_USER: orderflow
+      POSTGRES_PASSWORD: orderflow
+    volumes:
+      - postgres-payment-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orderflow -d payment_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-notification:
+    image: postgres:16-alpine
+    container_name: orderflow-postgres-notification
+    ports:
+      - "5436:5432"
+    environment:
+      POSTGRES_DB: notification_db
+      POSTGRES_USER: orderflow
+      POSTGRES_PASSWORD: orderflow
+    volumes:
+      - postgres-notification-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orderflow -d notification_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===========================================================================
+  # JAEGER — distributed tracing, dùng từ tuần 8
+  # Giao diện: http://localhost:16686
+  # ===========================================================================
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: orderflow-jaeger
+    ports:
+      - "16686:16686"   # UI
+      - "4317:4317"     # OTLP gRPC — service gửi trace vào đây
+      - "4318:4318"     # OTLP HTTP
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+
+  # ===========================================================================
+  # MAILHOG — SMTP giả cho dev, KHÔNG gửi mail thật ra ngoài
+  # Giao diện đọc mail: http://localhost:8025
+  # ===========================================================================
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: orderflow-mailhog
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # UI
+
+volumes:
+  kafka-data:
+  redis-data:
+  postgres-order-data:
+  postgres-inventory-data:
+  postgres-payment-data:
+  postgres-notification-data:
