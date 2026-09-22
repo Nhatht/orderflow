@@ -48,7 +48,7 @@ public class OrderJpaEntity {
     @Column(name = "total_amount", nullable = false, precision = 19, scale = 4)
     private BigDecimal totalAmount;
 
-    @Column(nullable = false, length = 3, columnDefinition = "char(3)")
+    @Column(nullable = false, length = 3)
     private String currency;
 
     @Version

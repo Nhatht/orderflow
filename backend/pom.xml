@@ -43,6 +43,22 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
         <spring-cloud.version>2023.0.3</spring-cloud.version>
+
+        <!--
+            Đè version mà Spring Boot 3.3.5 quản lý (1.19.8).
+            Lý do: 1.19.8 kéo theo docker-java 3.3.6, client này gửi Docker API
+            version cũ. Docker Engine 29 yêu cầu API tối thiểu 1.44 nên từ chối
+            với "Status 400" và Testcontainers báo "Could not find a valid
+            Docker environment" — thông điệp gây hiểu nhầm là chưa bật Docker.
+        -->
+        <testcontainers.version>1.21.3</testcontainers.version>
+
+        <!--
+            Docker API version mà docker-java sẽ dùng. Để trống nghĩa là
+            "tự thương lượng" — đúng cho Linux/CI. Profile bên dưới ghi đè
+            cho Windows, xem giải thích ở đó.
+        -->
+        <docker.api.version/>
         <redisson.version>3.34.1</redisson.version>
         <springdoc.version>2.6.0</springdoc.version>
         <mapstruct.version>1.6.2</mapstruct.version>
@@ -136,6 +152,32 @@
         </pluginManagement>
 
         <plugins>
+            <!--
+                Failsafe chạy integration test (*IT.java) ở pha `verify`.
+                Surefire chỉ chạy unit test (*Test.java) ở pha `test`.
+
+                Tách đôi có chủ đích: `mvn test` phải nhanh và không cần Docker,
+                còn `mvn verify` mới dựng container. Nhờ vậy vòng lặp sửa-chạy
+                hằng ngày không phải chờ Testcontainers khởi động.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <systemPropertyVariables>
+                        <api.version>${docker.api.version}</api.version>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
@@ -157,4 +199,33 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+            WINDOWS + DOCKER DESKTOP
+            ========================
+            Docker Desktop trên Windows nói chuyện qua named pipe, và bản
+            Engine 29 yêu cầu API version TỐI THIỂU 1.44. docker-java lại gửi
+            một version cũ hơn, nên bị từ chối với "Status 400" kèm payload
+            rỗng — và Testcontainers dịch thành thông điệp gây hiểu nhầm:
+            "Could not find a valid Docker environment", làm ai cũng tưởng
+            là chưa bật Docker Desktop.
+
+            Kiểm chứng nhanh bằng chính Docker CLI:
+                DOCKER_API_VERSION=1.43 docker info   -> 400 y hệt
+                DOCKER_API_VERSION=1.44 docker info   -> OK
+
+            Chỉ ghi đè trên Windows, KHÔNG áp cho Linux/CI: ép cứng 1.44 ở đó
+            sẽ hỏng nếu runner chạy Docker đời cũ hơn 25.0.
+        -->
+        <profile>
+            <id>windows-docker</id>
+            <activation>
+                <os><family>windows</family></os>
+            </activation>
+            <properties>
+                <docker.api.version>1.44</docker.api.version>
+            </properties>
+        </profile>
+    </profiles>
 </project>

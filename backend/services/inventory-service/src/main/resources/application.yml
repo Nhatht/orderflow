@@ -1,0 +1,98 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: inventory-service
+
+  datasource:
+    url: jdbc:postgresql://localhost:5434/inventory_db
+    username: orderflow
+    password: orderflow
+    hikari:
+      maximum-pool-size: 20    # cao hơn order-service: nhiều luồng chờ khoá cùng lúc
+      minimum-idle: 4
+      connection-timeout: 20000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+    show-sql: false
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+  kafka:
+    bootstrap-servers: localhost:29092   # 29092 = listener EXTERNAL, xem docker-compose.yml
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+    consumer:
+      group-id: inventory-service
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      properties:
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
+        spring.json.trusted.packages: com.orderflow.contracts
+
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    default-property-inclusion: non_null
+
+# =============================================================================
+# Cấu hình riêng của inventory — ba con số này đều có lý do, đừng đổi bừa
+# =============================================================================
+orderflow:
+  inventory:
+    # Phiếu giữ hàng sống bao lâu trước khi job dọn dẹp nhả về kho.
+    #
+    # 3 PHÚT, KHÔNG PHẢI 30 GIÂY. Khách phải mở app ngân hàng và nhập OTP,
+    # thực tế mất 30-90 giây. Đặt quá ngắn sẽ huỷ nhầm đơn hợp lệ, rồi
+    # PaymentCompleted về muộn -> khách bị trừ tiền mà đơn đã huỷ và hàng
+    # đã bán cho người khác. Xem docs/PATTERNS.md, bẫy "late response".
+    reservation-ttl: PT3M
+
+    lock:
+      # Chờ tối đa để lấy khoá. Hết thời gian thì ném lỗi cho client thử lại,
+      # KHÔNG chờ vô hạn — chờ vô hạn làm cạn thread pool và sập cả service.
+      wait-time: PT5S
+
+      # Giữ khoá tối đa rồi tự nhả. Đây là chống chết cứng: tiến trình bị kill
+      # thì khoá vẫn được giải phóng, không treo vĩnh viễn như coordinator 2PC.
+      # Phải lớn hơn hẳn thời gian xử lý thật (ở đây chỉ vài chục ms).
+      lease-time: PT10S
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+
+logging:
+  level:
+    com.orderflow: DEBUG

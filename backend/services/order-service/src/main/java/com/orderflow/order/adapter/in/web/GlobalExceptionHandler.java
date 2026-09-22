@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -64,6 +65,21 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest()
                 .body(ErrorResponse.of(400, "VALIDATION_FAILED",
                         "Request validation failed", errors));
+    }
+
+    /**
+     * Body không đọc được: JSON sai cú pháp, sai kiểu, hoặc không phải UTF-8 hợp lệ.
+     *
+     * <p>Đây là lỗi của client nên phải trả 400. Không có handler này thì nó rơi
+     * xuống nhánh 500 chung — khiến client tưởng server hỏng trong khi lỗi nằm ở
+     * request của họ, và làm nhiễu cảnh báo vận hành.
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleUnreadableBody(HttpMessageNotReadableException ex) {
+        log.debug("Malformed request body: {}", ex.getMessage());
+        return ResponseEntity.badRequest()
+                .body(ErrorResponse.of(400, "MALFORMED_REQUEST",
+                        "Request body is not valid JSON"));
     }
 
     /** Domain tự validate và ném IllegalArgumentException — vẫn là lỗi của client. */

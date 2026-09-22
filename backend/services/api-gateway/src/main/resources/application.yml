@@ -1,0 +1,19 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  data:
+    redis:
+      host: localhost
+      port: 6379
+  cloud:
+    gateway:
+      routes: []   # route sẽ khai ở tuần 7
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,gateway

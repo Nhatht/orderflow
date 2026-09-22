@@ -1,0 +1,25 @@
+server:
+  port: 8084
+
+spring:
+  application:
+    name: notification-service
+  datasource:
+    url: jdbc:postgresql://localhost:5436/notification_db
+    username: orderflow
+    password: orderflow
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+  kafka:
+    bootstrap-servers: localhost:29092   # 29092 = listener EXTERNAL, xem docker-compose.yml
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics

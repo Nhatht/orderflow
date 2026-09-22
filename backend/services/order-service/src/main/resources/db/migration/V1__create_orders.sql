@@ -15,7 +15,7 @@ CREATE TABLE orders (
     customer_id     UUID            NOT NULL,
     status          VARCHAR(32)     NOT NULL,
     total_amount    NUMERIC(19, 4)  NOT NULL,
-    currency        CHAR(3)         NOT NULL,
+    currency        VARCHAR(3)      NOT NULL,
 
     -- Optimistic locking: Hibernate tự tăng cột này mỗi lần UPDATE.
     -- Hai transaction cùng sửa một đơn thì đứa sau nhận
@@ -38,7 +38,7 @@ CREATE TABLE order_items (
     product_name    VARCHAR(255)    NOT NULL,
     quantity        INTEGER         NOT NULL,
     unit_price      NUMERIC(19, 4)  NOT NULL,
-    currency        CHAR(3)         NOT NULL,
+    currency        VARCHAR(3)      NOT NULL,
 
     CONSTRAINT fk_order_items_order
         FOREIGN KEY (order_id) REFERENCES orders (id) ON DELETE CASCADE,

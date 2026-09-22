@@ -103,6 +103,17 @@
             <artifactId>spring-kafka-test</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!--
+            Testcontainers không có module riêng cho Redis, dùng GenericContainer.
+            Test chạy trên Redis THẬT trong Docker — mock hay embedded Redis
+            đều không tái hiện được hành vi thật của distributed lock.
+        -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

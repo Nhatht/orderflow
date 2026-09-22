@@ -1,0 +1,25 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: payment-service
+  datasource:
+    url: jdbc:postgresql://localhost:5435/payment_db
+    username: orderflow
+    password: orderflow
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+  kafka:
+    bootstrap-servers: localhost:29092   # 29092 = listener EXTERNAL, xem docker-compose.yml
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
