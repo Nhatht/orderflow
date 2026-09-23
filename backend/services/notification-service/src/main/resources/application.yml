@@ -4,22 +4,62 @@ server:
 spring:
   application:
     name: notification-service
+
   datasource:
     url: jdbc:postgresql://localhost:5436/notification_db
     username: orderflow
     password: orderflow
+
   jpa:
     hibernate:
       ddl-auto: validate
     open-in-view: false
+
   flyway:
     enabled: true
     baseline-on-migrate: true
+    locations: classpath:db/migration
+
   kafka:
     bootstrap-servers: localhost:29092   # 29092 = listener EXTERNAL, xem docker-compose.yml
+    producer:
+      # Chỉ dùng để chuyển message hỏng sang DLT — service này không phát event.
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    consumer:
+      # Group riêng: nhận bản sao đầy đủ của order.confirmed/cancelled, song song
+      # với inventory mà không tranh message của nhau.
+      group-id: notification-service
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      concurrency: 3
+
+  # MailHog trong docker-compose: nhận mọi thư, không gửi ra ngoài.
+  # Xem thư đã "gửi" ở http://localhost:8025
+  mail:
+    host: localhost
+    port: 1025
+    properties:
+      mail.smtp.connectiontimeout: 5000
+      mail.smtp.timeout: 5000
+      mail.smtp.writetimeout: 5000
+
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+orderflow:
+  notification:
+    from: no-reply@orderflow.local
 
 management:
   endpoints:
     web:
       exposure:
         include: health,info,metrics
+
+logging:
+  level:
+    com.orderflow: DEBUG
