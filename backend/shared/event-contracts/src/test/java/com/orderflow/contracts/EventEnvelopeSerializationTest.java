@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.orderflow.contracts.inventory.StockReservationFailedEvent;
 import com.orderflow.contracts.order.OrderCreatedEvent;
+import com.orderflow.contracts.payment.PaymentRequestedEvent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -99,6 +100,19 @@ class EventEnvelopeSerializationTest {
                 .isEqualTo(StockReservationFailedEvent.Reason.INSUFFICIENT_STOCK);
         assertThat(event.payload().shortages()).singleElement()
                 .satisfies(s -> assertThat(s.available()).isEqualTo(1));
+    }
+
+    @Test
+    @DisplayName("Số tiền cần thu cũng đi dạng chuỗi, round-trip giữ nguyên scale")
+    void paymentAmountIsStringAndRoundTrips() throws Exception {
+        var payload = new PaymentRequestedEvent(orderId, UUID.randomUUID(), new BigDecimal("115500.5000"), "VND");
+        var original = EventEnvelope.of(PaymentRequestedEvent.TYPE, orderId.toString(), "c", payload);
+
+        String json = mapper.writeValueAsString(original);
+        assertThat(mapper.readTree(json).at("/payload/amount").isTextual()).isTrue();
+
+        EventEnvelope<PaymentRequestedEvent> restored = mapper.readValue(json, new TypeReference<>() {});
+        assertThat(restored).isEqualTo(original);
     }
 
     @Test

@@ -1,6 +1,10 @@
 package com.orderflow.inventory.application.port.out;
 
 import com.orderflow.inventory.application.dto.ReservationOutcome;
+import com.orderflow.inventory.application.dto.ReservationView;
+
+import java.util.List;
+import java.util.UUID;
 
 /**
  * CỔNG RA để báo kết quả giữ hàng cho phần còn lại của hệ thống.
@@ -16,4 +20,7 @@ public interface EventPublisherPort {
 
     /** PHẢI gọi trong transaction ghi {@code processed_events}. */
     void publishStockReservationFailed(ReservationOutcome.Rejected outcome, String correlationId);
+
+    /** PHẢI gọi trong transaction nhả hàng. {@code released} có thể rỗng — xem {@code StockReleasedEvent}. */
+    void publishStockReleased(UUID orderId, List<ReservationView> released, String correlationId);
 }

@@ -5,9 +5,11 @@ import com.orderflow.order.application.dto.PlaceOrderCommand;
 import com.orderflow.order.application.port.in.PlaceOrderUseCase;
 import com.orderflow.order.application.port.out.EventPublisherPort;
 import com.orderflow.order.application.port.out.OrderRepositoryPort;
+import com.orderflow.order.application.port.out.SagaStateRepositoryPort;
 import com.orderflow.order.domain.model.Money;
 import com.orderflow.order.domain.model.Order;
 import com.orderflow.order.domain.model.OrderItem;
+import com.orderflow.order.domain.model.OrderSaga;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -49,6 +51,7 @@ import java.util.List;
 public class PlaceOrderService implements PlaceOrderUseCase {
 
     private final OrderRepositoryPort orderRepository;
+    private final SagaStateRepositoryPort sagaRepository;
     private final EventPublisherPort eventPublisher;
     private final TransactionTemplate tx;
 
@@ -66,9 +69,10 @@ public class PlaceOrderService implements PlaceOrderUseCase {
 
         Order saved = tx.execute(status -> {
             Order persisted = orderRepository.save(order);
-            eventPublisher.publishOrderCreated(persisted);   // ← CÙNG transaction: ghi outbox
+            sagaRepository.save(OrderSaga.start(persisted.id()));   // saga bắt đầu cùng lúc với đơn
+            eventPublisher.publishOrderCreated(persisted);          // ← CÙNG transaction: ghi outbox
             return persisted;
-        });                                                  // ← COMMIT cả đơn lẫn event
+        });                                                         // ← COMMIT đơn + saga + event
 
         log.info("Order placed: id={}, customer={}, total={}",
                 saved.id(), saved.customerId(), saved.totalAmount());

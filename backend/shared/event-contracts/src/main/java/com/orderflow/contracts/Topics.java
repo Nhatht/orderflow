@@ -35,4 +35,26 @@ public final class Topics {
 
     /** inventory-service → order-service: không giữ được, đơn phải huỷ. */
     public static final String STOCK_RESERVATION_FAILED = "stock.reservation-failed";
+
+    /** inventory-service → order-service: đã nhả hàng về kho — bước đền bù HOÀN TẤT. */
+    public static final String STOCK_RELEASED = "stock.released";
+
+    // ---- Saga: thanh toán ---------------------------------------------------
+
+    /** order-service → payment-service: lệnh thu tiền cho đơn đã giữ được hàng. */
+    public static final String PAYMENT_REQUESTED = "payment.requested";
+
+    /** payment-service → order-service: đã thu tiền. */
+    public static final String PAYMENT_COMPLETED = "payment.completed";
+
+    /** payment-service → order-service: cổng thanh toán từ chối. */
+    public static final String PAYMENT_FAILED = "payment.failed";
+
+    // ---- Saga: kết cục của đơn ----------------------------------------------
+
+    /** order-service → inventory (chốt hàng), notification (tuần 7). */
+    public static final String ORDER_CONFIRMED = "order.confirmed";
+
+    /** order-service → inventory (nhả hàng — ĐỀN BÙ), notification (tuần 7). */
+    public static final String ORDER_CANCELLED = "order.cancelled";
 }

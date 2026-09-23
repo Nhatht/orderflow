@@ -3,7 +3,7 @@ package com.orderflow.payment;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
-/** Khung rỗng — sẽ hoàn thiện ở tuần sau theo docs/ROADMAP.md. */
+/** Payment Service — thu tiền cho đơn theo lệnh của saga, idempotent với cổng thanh toán bên ngoài. */
 @SpringBootApplication
 public class PaymentServiceApplication {
 

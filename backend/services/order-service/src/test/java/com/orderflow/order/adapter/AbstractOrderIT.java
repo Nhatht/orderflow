@@ -1,6 +1,9 @@
 package com.orderflow.order.adapter;
 
 import com.orderflow.contracts.Topics;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.AdminClientConfig;
+import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
@@ -16,6 +19,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.fail;
 
@@ -41,6 +45,25 @@ public abstract class AbstractOrderIT {
     static {
         POSTGRES.start();
         KAFKA.start();
+        createTopicsOwnedByOtherServices();
+    }
+
+    /**
+     * Năm topic phản hồi mà order-service NGHE nhưng inventory/payment SỞ HỮU.
+     * Ở đây không có hai service đó nên test tạo thay, cùng số partition.
+     */
+    private static void createTopicsOwnedByOtherServices() {
+        try (var admin = AdminClient.create(Map.of(
+                AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG,
+                KAFKA.getBootstrapServers()))) {
+            admin.createTopics(Stream.of(
+                            Topics.STOCK_RESERVED, Topics.STOCK_RESERVATION_FAILED, Topics.STOCK_RELEASED,
+                            Topics.PAYMENT_COMPLETED, Topics.PAYMENT_FAILED)
+                    .map(t -> new NewTopic(t, 3, (short) 1))
+                    .toList()).all().get();
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not create reply topics", e);
+        }
     }
 
     @DynamicPropertySource

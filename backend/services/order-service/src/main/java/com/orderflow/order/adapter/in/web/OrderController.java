@@ -3,7 +3,9 @@ package com.orderflow.order.adapter.in.web;
 import com.orderflow.order.adapter.in.web.request.PlaceOrderRequest;
 import com.orderflow.order.adapter.in.web.response.ErrorResponse;
 import com.orderflow.order.application.dto.OrderView;
+import com.orderflow.order.application.dto.SagaView;
 import com.orderflow.order.application.port.in.GetOrderQuery;
+import com.orderflow.order.application.port.in.GetSagaQuery;
 import com.orderflow.order.application.port.in.PlaceOrderUseCase;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -40,6 +42,7 @@ public class OrderController {
 
     private final PlaceOrderUseCase placeOrderUseCase;
     private final GetOrderQuery getOrderQuery;
+    private final GetSagaQuery getSagaQuery;
 
     @PostMapping
     @Operation(
@@ -73,6 +76,14 @@ public class OrderController {
     })
     public OrderView getOrder(@PathVariable UUID orderId) {
         return getOrderQuery.getById(orderId);
+    }
+
+    @GetMapping("/{orderId}/saga")
+    @Operation(summary = "Get the saga of an order",
+            description = "Current saga status plus every step in the order it happened, "
+                        + "including compensating steps. Source of the saga timeline in the UI.")
+    public SagaView getSaga(@PathVariable UUID orderId) {
+        return getSagaQuery.getByOrderId(orderId);
     }
 
     @GetMapping

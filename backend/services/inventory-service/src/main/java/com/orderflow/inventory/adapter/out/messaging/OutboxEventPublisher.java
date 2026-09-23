@@ -4,15 +4,20 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.orderflow.contracts.EventEnvelope;
 import com.orderflow.contracts.Topics;
+import com.orderflow.contracts.inventory.StockReleasedEvent;
 import com.orderflow.contracts.inventory.StockReservationFailedEvent;
 import com.orderflow.contracts.inventory.StockReservedEvent;
 import com.orderflow.inventory.application.dto.ReservationOutcome;
+import com.orderflow.inventory.application.dto.ReservationView;
 import com.orderflow.inventory.application.port.out.EventPublisherPort;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
+import java.util.UUID;
 
 /**
  * Dịch kết quả giữ hàng sang event contract rồi GHI vào bảng outbox.
@@ -56,6 +61,16 @@ public class OutboxEventPublisher implements EventPublisherPort {
 
         append(Topics.STOCK_RESERVATION_FAILED,
                 EventEnvelope.of(StockReservationFailedEvent.TYPE, outcome.orderId().toString(), correlationId, payload));
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void publishStockReleased(UUID orderId, List<ReservationView> released, String correlationId) {
+        var payload = new StockReleasedEvent(orderId, released.stream()
+                .map(r -> new StockReleasedEvent.ReleasedItem(r.productId(), r.quantity()))
+                .toList());
+        append(Topics.STOCK_RELEASED,
+                EventEnvelope.of(StockReleasedEvent.TYPE, orderId.toString(), correlationId, payload));
     }
 
     /**

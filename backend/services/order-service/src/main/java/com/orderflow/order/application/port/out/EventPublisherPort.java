@@ -12,13 +12,22 @@ import com.orderflow.order.domain.model.Order;
  * <p>Nhờ ranh giới này, tuần 5 thay Kafka trực tiếp bằng Transactional Outbox
  * chỉ bằng một adapter mới; chữ ký interface giữ nguyên. Thứ duy nhất đổi ở
  * tầng application là VỊ TRÍ gọi — xem hợp đồng bên dưới.
+ *
+ * <p><b>Mọi method PHẢI được gọi bên trong transaction đang ghi thay đổi
+ * tương ứng</b> — event và dữ liệu cùng commit hoặc cùng rollback. Cài đặt
+ * outbox ép điều này bằng {@code Propagation.MANDATORY}.
  */
 public interface EventPublisherPort {
 
-    /**
-     * PHẢI được gọi bên trong transaction đang ghi {@code order} — event và
-     * đơn cùng commit hoặc cùng rollback. Cài đặt outbox ép điều này bằng
-     * {@code Propagation.MANDATORY}: gọi ngoài transaction là exception.
-     */
+    /** Mở đầu saga — đồng thời là lệnh "hãy giữ hàng" gửi inventory. */
     void publishOrderCreated(Order order);
+
+    /** Lệnh thu tiền. {@code correlationId} mang tiếp từ phản hồi của inventory. */
+    void publishPaymentRequested(Order order, String correlationId);
+
+    void publishOrderConfirmed(Order order, String correlationId);
+
+    void publishOrderCancelled(Order order, CancellationReason reason, String correlationId);
+
+    enum CancellationReason { STOCK_UNAVAILABLE, PAYMENT_DECLINED }
 }

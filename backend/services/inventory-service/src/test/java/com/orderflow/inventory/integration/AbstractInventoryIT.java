@@ -53,20 +53,23 @@ public abstract class AbstractInventoryIT {
         POSTGRES.start();
         REDIS.start();
         KAFKA.start();
-        createTopicOwnedByOrderService();
+        createTopicsOwnedByOrderService();
     }
 
     /**
-     * {@code order.created} do order-service tạo trong hệ thống thật. Ở đây
+     * {@code order.created/confirmed/cancelled} do order-service tạo trong hệ thống thật. Ở đây
      * không có order-service, nên test tạo thay — cùng số partition với cấu
      * hình thật, để hành vi phân chia partition giống production.
      */
-    private static void createTopicOwnedByOrderService() {
+    private static void createTopicsOwnedByOrderService() {
         try (var admin = AdminClient.create(Map.of(
                 AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers()))) {
-            admin.createTopics(List.of(new NewTopic(Topics.ORDER_CREATED, 3, (short) 1))).all().get();
+            admin.createTopics(List.of(
+                    new NewTopic(Topics.ORDER_CREATED, 3, (short) 1),
+                    new NewTopic(Topics.ORDER_CONFIRMED, 3, (short) 1),
+                    new NewTopic(Topics.ORDER_CANCELLED, 3, (short) 1))).all().get();
         } catch (Exception e) {
-            throw new IllegalStateException("Could not create topic " + Topics.ORDER_CREATED, e);
+            throw new IllegalStateException("Could not create order-service topics", e);
         }
     }
 

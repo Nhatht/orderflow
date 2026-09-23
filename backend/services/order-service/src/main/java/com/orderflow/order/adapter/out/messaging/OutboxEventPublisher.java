@@ -4,7 +4,10 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.orderflow.contracts.EventEnvelope;
 import com.orderflow.contracts.Topics;
+import com.orderflow.contracts.order.OrderCancelledEvent;
+import com.orderflow.contracts.order.OrderConfirmedEvent;
 import com.orderflow.contracts.order.OrderCreatedEvent;
+import com.orderflow.contracts.payment.PaymentRequestedEvent;
 import com.orderflow.order.application.port.out.EventPublisherPort;
 import com.orderflow.order.domain.model.Order;
 import lombok.RequiredArgsConstructor;
@@ -55,6 +58,31 @@ public class OutboxEventPublisher implements EventPublisherPort {
                 OrderCreatedEvent.TYPE, order.id().toString(), UUID.randomUUID().toString(), payload);
 
         append("Order", Topics.ORDER_CREATED, envelope);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void publishPaymentRequested(Order order, String correlationId) {
+        var payload = new PaymentRequestedEvent(
+                order.id(), order.customerId(), order.totalAmount().amount(), order.currency());
+        append("Order", Topics.PAYMENT_REQUESTED,
+                EventEnvelope.of(PaymentRequestedEvent.TYPE, order.id().toString(), correlationId, payload));
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void publishOrderConfirmed(Order order, String correlationId) {
+        append("Order", Topics.ORDER_CONFIRMED,
+                EventEnvelope.of(OrderConfirmedEvent.TYPE, order.id().toString(), correlationId,
+                        new OrderConfirmedEvent(order.id())));
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void publishOrderCancelled(Order order, CancellationReason reason, String correlationId) {
+        append("Order", Topics.ORDER_CANCELLED,
+                EventEnvelope.of(OrderCancelledEvent.TYPE, order.id().toString(), correlationId,
+                        new OrderCancelledEvent(order.id(), OrderCancelledEvent.Reason.valueOf(reason.name()))));
     }
 
     /**
