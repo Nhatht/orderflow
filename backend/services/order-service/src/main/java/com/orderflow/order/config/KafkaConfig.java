@@ -135,7 +135,7 @@ public class KafkaConfig {
     }
 
     /**
-     * DLT của năm topic mà order-service NGHE. Bên nghe sở hữu DLT của mình:
+     * DLT của sáu topic mà order-service NGHE. Bên nghe sở hữu DLT của mình:
      * message hỏng là chuyện của consumer, không phải của producer.
      * Broker tắt auto-create, nên thiếu bean này thì recoverer ghi vào DLT thất bại.
      */
@@ -143,7 +143,7 @@ public class KafkaConfig {
     public KafkaAdmin.NewTopics deadLetterTopics() {
         return new KafkaAdmin.NewTopics(Stream.of(
                         Topics.STOCK_RESERVED, Topics.STOCK_RESERVATION_FAILED, Topics.STOCK_RELEASED,
-                        Topics.PAYMENT_COMPLETED, Topics.PAYMENT_FAILED)
+                        Topics.STOCK_RESERVATION_EXPIRED, Topics.PAYMENT_COMPLETED, Topics.PAYMENT_FAILED)
                 .map(t -> TopicBuilder.name(t + ".DLT").partitions(3).replicas(1).build())
                 .toArray(NewTopic[]::new));
     }

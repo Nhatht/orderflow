@@ -154,7 +154,7 @@ class OrderOutcomeConsumerIT extends AbstractInventoryIT {
         UUID orderId = UUID.randomUUID();   // chưa từng giữ hàng
 
         send(Topics.ORDER_CANCELLED, orderId, EventEnvelope.of(OrderCancelledEvent.TYPE, orderId.toString(), "c",
-                new OrderCancelledEvent(orderId, OrderCancelledEvent.Reason.PAYMENT_DECLINED)));
+                new OrderCancelledEvent(orderId, UUID.randomUUID(), OrderCancelledEvent.Reason.PAYMENT_DECLINED)));
 
         var record = awaitReleased(orderId);
         EventEnvelope<StockReleasedEvent> event = objectMapper.readValue(record.value(), new TypeReference<>() {});

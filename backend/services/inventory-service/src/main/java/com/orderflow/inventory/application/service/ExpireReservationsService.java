@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -113,14 +114,17 @@ public class ExpireReservationsService implements ExpireReservationsUseCase {
     }
 
     private int expireOrder(UUID orderId, List<StockReservation> candidates, Instant now) {
-        List<String> lockKeys = candidates.stream().map(r -> stockLockKey(r.productId())).toList();
+        Set<UUID> lockedProducts = candidates.stream().map(StockReservation::productId).collect(Collectors.toSet());
+        List<String> lockKeys = lockedProducts.stream().map(ExpireReservationsService::stockLockKey).toList();
 
         Integer count = lock.executeWithLocks(lockKeys, lockWaitTime, lockLeaseTime, () -> tx.execute(status -> {
             List<ReservationView> expired = new ArrayList<>();
             // Đọc lại BÊN TRONG khoá: có thể đơn vừa được chốt/huỷ, hoặc instance
             // khác vừa nhả xong. isExpired() chỉ đúng với phiếu còn HELD.
             for (StockReservation reservation : reservationRepository.findByOrderId(orderId)) {
-                if (!reservation.isExpired(now)) {
+                // findExpired có LIMIT nên lô có thể cắt ngang một đơn: phiếu của
+                // sản phẩm ngoài lô thì không đang giữ khoá — để lần chạy sau.
+                if (!lockedProducts.contains(reservation.productId()) || !reservation.isExpired(now)) {
                     continue;
                 }
                 Stock stock = stockRepository.findByProductId(reservation.productId())
