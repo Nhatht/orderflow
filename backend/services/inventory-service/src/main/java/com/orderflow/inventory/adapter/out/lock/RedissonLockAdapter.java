@@ -9,6 +9,8 @@ import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.Collection;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
@@ -81,6 +83,61 @@ public class RedissonLockAdapter implements DistributedLockPort {
             if (acquired && lock.isHeldByCurrentThread()) {
                 lock.unlock();
                 log.debug("Lock released: {}", key);
+            }
+        }
+    }
+
+    /**
+     * Khoá nhiều key cùng lúc bằng {@code RedissonMultiLock}: lấy được TẤT CẢ
+     * thì chạy, thiếu một cái thì nhả hết những cái đã lấy rồi thử lại, hết
+     * {@code waitTime} thì bỏ cuộc.
+     *
+     * <p><b>Sắp xếp key trước khi khoá</b> — đây là kỹ thuật kinh điển chống
+     * deadlock (lock ordering). Hai đơn cùng chứa kẹo dừa và bánh tráng, nếu
+     * mỗi đơn khoá theo thứ tự dòng hàng của mình thì có thể mỗi bên cầm một
+     * khoá và chờ khoá của bên kia. MultiLock không treo vĩnh viễn nhờ có
+     * {@code waitTime}, nhưng hai bên sẽ cùng thất bại rồi cùng thử lại
+     * (livelock). Khoá theo thứ tự chung thì bên đến sau luôn chờ ở khoá ĐẦU
+     * TIÊN, không bao giờ cầm dở dang.
+     */
+    @Override
+    public <T> T executeWithLocks(Collection<String> keys, Duration waitTime, Duration leaseTime,
+                                  Supplier<T> action) {
+        List<String> ordered = keys.stream().distinct().sorted().toList();
+        if (ordered.size() == 1) {
+            return executeWithLock(ordered.getFirst(), waitTime, leaseTime, action);
+        }
+
+        List<RLock> locks = ordered.stream().map(redisson::getLock).toList();
+        RLock multiLock = redisson.getMultiLock(locks.toArray(RLock[]::new));
+        boolean acquired = false;
+
+        try {
+            acquired = multiLock.tryLock(waitTime.toMillis(), leaseTime.toMillis(), TimeUnit.MILLISECONDS);
+
+            if (!acquired) {
+                log.warn("Failed to acquire {} locks {} within {}", ordered.size(), ordered, waitTime);
+                throw new LockAcquisitionException(String.join(",", ordered));
+            }
+
+            log.debug("Locks acquired: {}", ordered);
+            return action.get();
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new LockAcquisitionException(String.join(",", ordered), e);
+
+        } finally {
+            // Nhả TỪNG khoá con, không gọi multiLock.unlock(): khoá nào đã hết
+            // lease và sang tay người khác thì multiLock.unlock() ném exception,
+            // che mất exception gốc. Cùng lý do với isHeldByCurrentThread() ở trên.
+            if (acquired) {
+                for (RLock lock : locks) {
+                    if (lock.isHeldByCurrentThread()) {
+                        lock.unlock();
+                    }
+                }
+                log.debug("Locks released: {}", ordered);
             }
         }
     }

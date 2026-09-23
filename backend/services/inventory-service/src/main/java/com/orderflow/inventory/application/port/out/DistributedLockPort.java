@@ -1,6 +1,7 @@
 package com.orderflow.inventory.application.port.out;
 
 import java.time.Duration;
+import java.util.Collection;
 import java.util.function.Supplier;
 
 /**
@@ -29,4 +30,15 @@ public interface DistributedLockPort {
      *                  của 2PC không làm được.
      */
     <T> T executeWithLock(String key, Duration waitTime, Duration leaseTime, Supplier<T> action);
+
+    /**
+     * Như {@link #executeWithLock}, nhưng giữ NHIỀU khoá cùng lúc — tất cả
+     * hoặc không cái nào.
+     *
+     * <p>Dùng khi một thao tác đụng nhiều tài nguyên, ví dụ giữ hàng cho cả
+     * đơn có nhiều sản phẩm. Cài đặt phải lấy khoá theo một THỨ TỰ CỐ ĐỊNH
+     * để tránh deadlock: luồng A khoá kẹo-dừa rồi chờ bánh-tráng, luồng B khoá
+     * bánh-tráng rồi chờ kẹo-dừa — cả hai chờ nhau mãi.
+     */
+    <T> T executeWithLocks(Collection<String> keys, Duration waitTime, Duration leaseTime, Supplier<T> action);
 }

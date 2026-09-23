@@ -49,14 +49,20 @@ spring:
       retries: 3
       properties:
         enable.idempotence: true   # producer không gửi trùng khi retry
+        # KHÔNG gắn header __TypeId__ = "com.orderflow.contracts.EventEnvelope".
+        # Header đó biến TÊN CLASS JAVA thành một phần của hợp đồng trên dây:
+        # đổi package là consumer vỡ, consumer viết bằng ngôn ngữ khác thì vô
+        # nghĩa. Hợp đồng chỉ nên là JSON + tên topic. Consumer tự biết kiểu
+        # payload vì mỗi topic chở đúng một loại event.
+        spring.json.add.type.headers: false
     consumer:
       group-id: order-service
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
-      properties:
-        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
-        spring.json.trusted.packages: com.orderflow.contracts
+      # Đọc value thành CHUỖI, để StringJsonMessageConverter (KafkaConfig) chuyển
+      # sang đúng kiểu generic của tham số listener. Xem KafkaConfig của
+      # inventory-service để biết vì sao không dùng JsonDeserializer.
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
 
   jackson:
     serialization:

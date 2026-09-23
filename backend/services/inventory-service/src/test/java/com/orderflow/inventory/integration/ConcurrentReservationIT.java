@@ -7,17 +7,7 @@ import com.orderflow.inventory.domain.exception.InsufficientStockException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.utility.DockerImageName;
 
-import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.*;
@@ -40,60 +30,22 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>Bỏ Redis lock đi rồi chạy lại thì test này FAIL — đó là cách chứng minh
  * cái khoá thật sự có tác dụng chứ không phải "có cho đẹp".
  *
- * <p><b>Ghi chú về thiết kế test:</b> container là {@code static} nên dùng chung
- * cho cả class, và database KHÔNG được reset giữa các test. Vì vậy mỗi test tự
- * tạo sản phẩm riêng thay vì dùng dữ liệu seed — nếu không, test này giữ hàng
- * của test kia và kết quả phụ thuộc thứ tự chạy (JUnit không bảo đảm thứ tự).
+ * <p><b>Ghi chú về thiết kế test:</b> container dùng chung (xem
+ * {@link AbstractInventoryIT}), database KHÔNG được reset giữa các test. Vì vậy
+ * mỗi test tự tạo sản phẩm riêng thay vì dùng dữ liệu seed — nếu không, test
+ * này giữ hàng của test kia và kết quả phụ thuộc thứ tự chạy.
+ *
+ * <p>Tuần 3 test này tắt hẳn Kafka. Từ tuần 4 service có Kafka listener và
+ * publisher — context không dựng được nếu thiếu Kafka — nên dùng chung nền với
+ * {@link OrderCreatedConsumerIT}.
  */
-@Testcontainers
-@SpringBootTest
-class ConcurrentReservationIT {
+class ConcurrentReservationIT extends AbstractInventoryIT {
 
     /** Số khách cùng tranh nhau chiếc cuối cùng. */
     private static final int CONCURRENT_BUYERS = 50;
 
-    @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
-            .withDatabaseName("inventory_db")
-            .withUsername("orderflow")
-            .withPassword("orderflow");
-
-    @Container
-    static GenericContainer<?> redis = new GenericContainer<>(DockerImageName.parse("redis:7.4-alpine"))
-            .withExposedPorts(6379);
-
-    /**
-     * Trỏ Spring sang container vừa dựng. Cổng do Docker cấp ngẫu nhiên nên
-     * phải lấy lúc chạy, không hardcode được.
-     */
-    @DynamicPropertySource
-    static void properties(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", postgres::getJdbcUrl);
-        registry.add("spring.datasource.username", postgres::getUsername);
-        registry.add("spring.datasource.password", postgres::getPassword);
-        registry.add("spring.data.redis.host", redis::getHost);
-        registry.add("spring.data.redis.port", () -> redis.getMappedPort(6379));
-
-        // Không cần Kafka cho test này
-        registry.add("spring.kafka.bootstrap-servers", () -> "localhost:1");
-        registry.add("spring.autoconfigure.exclude",
-                () -> "org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration");
-    }
-
     @Autowired ReserveStockUseCase reserveStock;
     @Autowired GetStockQuery getStock;
-    @Autowired JdbcTemplate jdbc;
-
-    /** Tạo một sản phẩm mới với tồn kho cho trước, riêng cho từng test. */
-    private UUID givenProductWithStock(int quantity) {
-        UUID productId = UUID.randomUUID();
-        jdbc.update("INSERT INTO products (id, sku, name, price, currency) VALUES (?, ?, ?, ?, ?)",
-                productId, "TEST-" + productId.toString().substring(0, 8),
-                "Test product", new BigDecimal("10000.0000"), "VND");
-        jdbc.update("INSERT INTO stock (product_id, available_qty, reserved_qty) VALUES (?, ?, 0)",
-                productId, quantity);
-        return productId;
-    }
 
     @Test
     @DisplayName("50 luồng cùng mua sản phẩm còn 1 cái → đúng 1 thành công, tồn kho không âm")
