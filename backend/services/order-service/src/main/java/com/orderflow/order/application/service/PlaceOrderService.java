@@ -26,25 +26,22 @@ import java.util.List;
  * <p>Đây là ranh giới rõ nhất giữa "service béo, model rỗng" (anemic domain —
  * thứ cần tránh) và cách làm này.
  *
- * <p><b>Vì sao phát event SAU khi commit, không phải bên trong transaction:</b>
- * <pre>
- *   @Transactional
- *   placeOrder() {
- *       save(order);
- *       publish(event);     // Kafka nhận event ngay...
- *   }                       // ...rồi commit FAIL → rollback
- * </pre>
- * Inventory nhận {@code order.created} cho một đơn KHÔNG TỒN TẠI, giữ hàng cho
- * một bóng ma. Kafka không tham gia transaction của PostgreSQL, nên rollback
- * không thu hồi được message đã gửi.
- *
- * <p>Đổi thứ tự thành "commit xong mới phát" thì lỗi tệ nhất chỉ còn là
- * <i>mất</i> event (đơn kẹt ở PENDING), chứ không bao giờ <i>bịa</i> ra event
- * cho đơn không có thật. Vẫn chưa đúng hoàn toàn — đó là việc của
- * Transactional Outbox ở tuần 5 — nhưng là lỗi dễ phát hiện và sửa hơn.
+ * <p><b>Lịch sử của dòng {@code publishOrderCreated} — ba phiên bản:</b>
+ * <ol>
+ *   <li><i>Gửi Kafka bên trong transaction</i> — commit fail sau khi Kafka đã
+ *       nhận → inventory giữ hàng cho một đơn KHÔNG TỒN TẠI. Kafka không tham
+ *       gia transaction của PostgreSQL, rollback không thu hồi được message.</li>
+ *   <li><i>Gửi Kafka sau commit</i> (tuần 4) — không còn bịa event, nhưng app
+ *       chết giữa commit và gửi thì MẤT event: đơn kẹt PENDING, không log lỗi.
+ *       Đã tái hiện thật ngày 23/09/2026: tắt Kafka, đặt đơn, kill app.</li>
+ *   <li><i>Ghi vào bảng outbox bên trong transaction</i> (tuần 5, hiện tại) —
+ *       đơn và event cùng một database, cùng commit hoặc cùng rollback.
+ *       {@code OutboxPoller} đẩy lên Kafka sau. Luồng HTTP không chạm tới
+ *       Kafka nữa: Kafka sập thì đặt đơn vẫn chạy bình thường.</li>
+ * </ol>
  *
  * <p>Dùng {@link TransactionTemplate} thay {@code @Transactional} để ranh giới
- * transaction hiện rõ ngay trong code: đọc là thấy publish nằm NGOÀI.
+ * transaction hiện rõ ngay trong code: đọc là thấy publish nằm TRONG.
  */
 @Slf4j
 @Service
@@ -67,12 +64,14 @@ public class PlaceOrderService implements PlaceOrderUseCase {
 
         Order order = Order.place(command.customerId(), items);
 
-        Order saved = tx.execute(status -> orderRepository.save(order));   // ← COMMIT ở đây
+        Order saved = tx.execute(status -> {
+            Order persisted = orderRepository.save(order);
+            eventPublisher.publishOrderCreated(persisted);   // ← CÙNG transaction: ghi outbox
+            return persisted;
+        });                                                  // ← COMMIT cả đơn lẫn event
 
         log.info("Order placed: id={}, customer={}, total={}",
                 saved.id(), saved.customerId(), saved.totalAmount());
-
-        eventPublisher.publishOrderCreated(saved);                         // ← sau commit
 
         return OrderView.from(saved);
     }

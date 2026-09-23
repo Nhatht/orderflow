@@ -45,7 +45,7 @@ import static org.assertj.core.api.Assertions.fail;
  */
 class OrderCreatedConsumerIT extends AbstractInventoryIT {
 
-    @Autowired KafkaTemplate<String, Object> kafkaTemplate;
+    @Autowired KafkaTemplate<String, String> kafkaTemplate;
     @Autowired GetStockQuery getStock;
     @Autowired ObjectMapper objectMapper;
 
@@ -111,7 +111,7 @@ class OrderCreatedConsumerIT extends AbstractInventoryIT {
             assertThat(s.available()).isEqualTo(1);
         });
 
-        // Event kết quả chỉ được phát SAU commit — nên lúc này DB đã ở trạng thái cuối.
+        // Event kết quả chỉ lên Kafka sau khi transaction commit — nên lúc này DB đã ở trạng thái cuối.
         assertStock(plenty, 10, 0);
         assertStock(scarce, 1, 0);
     }
@@ -134,13 +134,50 @@ class OrderCreatedConsumerIT extends AbstractInventoryIT {
         // lính canh xuất hiện, bản trùng chắc chắn đã đi qua listener.
         UUID sentinelProduct = givenProductWithStock(10);
         var sentinel = orderCreated(line(sentinelProduct, 1));
-        kafkaTemplate.send(Topics.ORDER_CREATED, envelope.aggregateId(), sentinel).get();
+        kafkaTemplate.send(Topics.ORDER_CREATED, envelope.aggregateId(), objectMapper.writeValueAsString(sentinel)).get();
         awaitRecord(Topics.STOCK_RESERVED, sentinel.aggregateId());
 
         assertStock(product, 8, 2);
         assertThat(recordsSeenWithKey(Topics.STOCK_RESERVED, envelope.aggregateId()))
                 .as("order-service không được nhận hai lần stock.reserved cho cùng một đơn")
                 .isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM outbox WHERE aggregate_id = ?", Integer.class, envelope.aggregateId()))
+                .as("bản trùng không ghi thêm dòng outbox nào")
+                .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Sổ đã xử lý, tồn kho và event kết quả nằm trong CÙNG transaction")
+    void processedMarkerAndResultEventCommitTogether() throws Exception {
+        UUID product = givenProductWithStock(10);
+        var envelope = orderCreated(line(product, 1));
+
+        send(envelope);
+        awaitRecord(Topics.STOCK_RESERVED, envelope.aggregateId());
+
+        // Kiểm chứng TRỰC TIẾP "do cùng một transaction ghi", không suy luận:
+        //
+        // (1) xmin = id của transaction đã ghi ra phiên bản hiện tại của dòng.
+        //     Dùng được cho processed_events và stock_reservations vì sau đó
+        //     không ai UPDATE chúng.
+        String markerTx = jdbc.queryForObject(
+                "SELECT xmin::text FROM processed_events WHERE event_id = ?", String.class, envelope.eventId());
+        String reservationTx = jdbc.queryForObject(
+                "SELECT xmin::text FROM stock_reservations WHERE order_id = ?", String.class,
+                UUID.fromString(envelope.aggregateId()));
+        assertThat(reservationTx).isEqualTo(markerTx);
+
+        // (2) Dòng outbox thì KHÔNG dùng xmin được: poller đã UPDATE published_at,
+        //     nên xmin giờ là id transaction của poller. Thay vào đó so cột
+        //     DEFAULT now(): now() trả về thời điểm BẮT ĐẦU transaction, giống
+        //     hệt nhau cho mọi dòng trong cùng transaction, và poller không đụng.
+        Boolean sameTransactionStart = jdbc.queryForObject("""
+                SELECT o.created_at = p.processed_at
+                FROM outbox o, processed_events p
+                WHERE o.aggregate_id = ? AND o.event_type = 'StockReserved' AND p.event_id = ?
+                """, Boolean.class, envelope.aggregateId(), envelope.eventId());
+        assertThat(sameTransactionStart).isTrue();
     }
 
     @Test
@@ -212,7 +249,7 @@ class OrderCreatedConsumerIT extends AbstractInventoryIT {
     }
 
     private void send(EventEnvelope<OrderCreatedEvent> envelope) throws Exception {
-        kafkaTemplate.send(Topics.ORDER_CREATED, envelope.aggregateId(), envelope).get();
+        kafkaTemplate.send(Topics.ORDER_CREATED, envelope.aggregateId(), objectMapper.writeValueAsString(envelope)).get();
     }
 
     private void assertStock(UUID productId, int available, int reserved) {

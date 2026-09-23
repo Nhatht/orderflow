@@ -59,15 +59,19 @@ import java.util.stream.Collectors;
  * trước đó. Order-service nhận hai câu trả lời trái ngược cho cùng một câu hỏi.
  * Đã trả lời thì phải trả lời nhất quán.
  *
- * <h2>3. Thứ tự: khoá → transaction → commit → nhả khoá → phát event</h2>
+ * <h2>3. Sổ + giữ hàng + event: MỘT transaction (Outbox, tuần 5)</h2>
  *
- * <p>Khoá bọc ngoài transaction vì cùng lý do với {@link ReserveStockService}.
- * Phát event SAU cùng, ngoài cả khoá: không giữ khoá Redis trong lúc chờ Kafka.
+ * <p>Tuần 4 phát event SAU commit, và có một lỗ hổng tệ: commit xong (sổ đã
+ * ghi "đã xử lý") mà chết trước khi phát → lần giao lại gặp {@code Duplicate}
+ * → không phát gì → kết quả mất vĩnh viễn, chính idempotency chặn đường tự
+ * phục hồi.
  *
- * <p><b>Lỗ hổng còn lại (tuần 5 sửa):</b> commit xong mà chết trước khi phát
- * event thì kết quả mất. Lần giao lại gặp sổ đã ghi → {@code Duplicate} → không
- * phát gì. Đơn kẹt mãi. Outbox sửa bằng cách ghi event vào bảng outbox trong
- * CÙNG transaction này.
+ * <p>Giờ event được ghi vào bảng outbox BÊN TRONG transaction. Ba thứ cùng
+ * commit hoặc cùng rollback: dòng {@code processed_events}, thay đổi tồn kho,
+ * và dòng outbox. Đã có "đã xử lý" thì chắc chắn đã có event chờ gửi.
+ *
+ * <p>Khoá vẫn bọc ngoài transaction, cùng lý do với {@link ReserveStockService}.
+ * Và không còn giữ khoá Redis trong lúc chờ Kafka nữa — vì không còn chờ Kafka.
  */
 @Slf4j
 @Service
@@ -113,17 +117,24 @@ public class ReserveOrderStockService implements ReserveOrderStockUseCase {
                 .map(ReserveOrderStockService::stockLockKey)
                 .toList();
 
-        ReservationOutcome outcome = lock.executeWithLocks(lockKeys, lockWaitTime, lockLeaseTime, () ->
-                tx.execute(status -> doReserve(command, wanted)));        // ← COMMIT + nhả khoá
+        return lock.executeWithLocks(lockKeys, lockWaitTime, lockLeaseTime, () ->
+                tx.execute(status -> {
+                    ReservationOutcome outcome = doReserve(command, wanted);
+                    recordResultEvent(outcome, command);   // ← CÙNG transaction: ghi outbox
+                    return outcome;
+                }));                                       // ← COMMIT sổ + tồn kho + event, rồi nhả khoá
+    }
 
-        switch (outcome) {                                                  // ← phát event sau cùng
+    private void recordResultEvent(ReservationOutcome outcome, ReserveOrderStockCommand command) {
+        switch (outcome) {
             case ReservationOutcome.Reserved r -> eventPublisher.publishStockReserved(r, command.correlationId());
             case Rejected r -> eventPublisher.publishStockReservationFailed(r, command.correlationId());
             case ReservationOutcome.Duplicate d ->
-                    log.info("Duplicate delivery for order={} key={} — already handled, publishing nothing",
+                    // Lần đầu đã ghi event vào outbox cùng transaction với sổ —
+                    // nên ở đây KHÔNG cần (và không được) ghi lại.
+                    log.info("Duplicate delivery for order={} key={} — already handled, recording nothing",
                             d.orderId(), command.idempotencyKey());
         }
-        return outcome;
     }
 
     private ReservationOutcome doReserve(ReserveOrderStockCommand command, Map<UUID, Integer> wanted) {

@@ -11,7 +11,9 @@ import com.orderflow.inventory.application.dto.ReservationOutcome;
  */
 public interface EventPublisherPort {
 
+    /** PHẢI gọi trong transaction giữ hàng — cài đặt outbox ép bằng MANDATORY. */
     void publishStockReserved(ReservationOutcome.Reserved outcome, String correlationId);
 
+    /** PHẢI gọi trong transaction ghi {@code processed_events}. */
     void publishStockReservationFailed(ReservationOutcome.Rejected outcome, String correlationId);
 }

@@ -38,12 +38,16 @@ spring:
     bootstrap-servers: localhost:29092   # 29092 = listener EXTERNAL, xem docker-compose.yml
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      # Chuỗi JSON đã serialize sẵn trong outbox — xem giải thích ở order-service.
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
       acks: all
       properties:
         enable.idempotence: true
-        # Không gắn tên class Java vào header — xem giải thích ở order-service.
-        spring.json.add.type.headers: false
+        # Thất bại nhanh: outbox mới là bộ đệm bền vững, không phải RAM của
+        # producer. Xem giải thích đầy đủ ở order-service.
+        max.block.ms: 5000
+        request.timeout.ms: 5000
+        delivery.timeout.ms: 10000
     consumer:
       # Group id = tên service. Mọi instance inventory chung một group, nên mỗi
       # message chỉ được MỘT instance xử lý (Kafka chia partition cho họ).
@@ -70,6 +74,13 @@ spring:
 # Cấu hình riêng của inventory — ba con số này đều có lý do, đừng đổi bừa
 # =============================================================================
 orderflow:
+  outbox:                   # ý nghĩa từng dòng: xem application.yml của order-service
+    poll-interval: PT0.5S
+    batch-size: 100
+    send-timeout: PT15S
+    retention: P7D
+    cleanup-cron: "0 0 3 * * *"
+
   inventory:
     # Phiếu giữ hàng sống bao lâu trước khi job dọn dẹp nhả về kho.
     #
