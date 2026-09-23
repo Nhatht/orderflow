@@ -4,13 +4,54 @@ server:
 spring:
   application:
     name: api-gateway
+
   data:
     redis:
       host: localhost
       port: 6379
+
   cloud:
     gateway:
-      routes: []   # route sẽ khai ở tuần 7
+      # Áp cho MỌI route. /auth/login không phải route (là controller của chính
+      # gateway) nên không bị giới hạn ở đây.
+      default-filters:
+        - name: RequestRateLimiter
+          args:
+            # Token bucket — xem config/RateLimitConfig.java.
+            # Trung bình 10 request/giây mỗi người, cho dồn tới 20 một lúc.
+            redis-rate-limiter.replenishRate: ${orderflow.gateway.rate-limit.replenish-rate:10}
+            redis-rate-limiter.burstCapacity: ${orderflow.gateway.rate-limit.burst-capacity:20}
+            redis-rate-limiter.requestedTokens: 1
+            key-resolver: "#{@userKeyResolver}"
+      routes:
+        - id: order-service
+          uri: ${ORDER_SERVICE_URL:http://localhost:8081}
+          predicates:
+            - Path=/api/orders/**
+        - id: inventory-service
+          uri: ${INVENTORY_SERVICE_URL:http://localhost:8082}
+          predicates:
+            - Path=/api/inventory/**
+        - id: payment-service
+          uri: ${PAYMENT_SERVICE_URL:http://localhost:8083}
+          predicates:
+            - Path=/api/payments/**
+
+orderflow:
+  gateway:
+    jwt:
+      # CHỈ DÙNG CHO DEV. Production: đưa qua biến môi trường JWT_SECRET hoặc
+      # secret manager, và tốt hơn nữa là RS256 với auth server riêng.
+      secret: ${JWT_SECRET:dev-only-secret-change-me-at-least-32-bytes!!}
+      ttl: PT1H
+    # Người dùng demo — thay cho auth service thật (ngoài phạm vi dự án).
+    demo-users:
+      alice:
+        password: alice123
+        customer-id: c0ffee00-0000-0000-0000-00000000a11c
+      bob:
+        password: bob123
+        customer-id: c0ffee00-0000-0000-0000-000000000b0b
 
 management:
   endpoints:
