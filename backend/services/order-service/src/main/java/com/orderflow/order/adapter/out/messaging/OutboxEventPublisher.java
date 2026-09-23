@@ -11,6 +11,7 @@ import com.orderflow.contracts.payment.PaymentRequestedEvent;
 import com.orderflow.order.application.port.out.EventPublisherPort;
 import com.orderflow.order.domain.model.Order;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.MDC;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
@@ -52,10 +53,12 @@ public class OutboxEventPublisher implements EventPublisherPort {
                                 i.productId(), i.productName(), i.quantity(), i.unitPrice().amount()))
                         .toList());
 
-        // correlationId: đơn là điểm khởi đầu của luồng nên sinh mới ở đây.
-        // Từ tuần 7 API Gateway sinh nó ở rìa hệ thống và truyền xuống.
+        // correlationId sinh ở RÌA hệ thống (API Gateway) và tới đây qua MDC —
+        // xem CorrelationIdFilter. Không có (gọi từ test, từ job) thì tự sinh.
+        String correlationId = MDC.get("correlationId");
         var envelope = EventEnvelope.of(
-                OrderCreatedEvent.TYPE, order.id().toString(), UUID.randomUUID().toString(), payload);
+                OrderCreatedEvent.TYPE, order.id().toString(),
+                correlationId != null ? correlationId : UUID.randomUUID().toString(), payload);
 
         append("Order", Topics.ORDER_CREATED, envelope);
     }
@@ -74,7 +77,7 @@ public class OutboxEventPublisher implements EventPublisherPort {
     public void publishOrderConfirmed(Order order, String correlationId) {
         append("Order", Topics.ORDER_CONFIRMED,
                 EventEnvelope.of(OrderConfirmedEvent.TYPE, order.id().toString(), correlationId,
-                        new OrderConfirmedEvent(order.id())));
+                        new OrderConfirmedEvent(order.id(), order.customerId())));
     }
 
     @Override
@@ -82,7 +85,7 @@ public class OutboxEventPublisher implements EventPublisherPort {
     public void publishOrderCancelled(Order order, CancellationReason reason, String correlationId) {
         append("Order", Topics.ORDER_CANCELLED,
                 EventEnvelope.of(OrderCancelledEvent.TYPE, order.id().toString(), correlationId,
-                        new OrderCancelledEvent(order.id(), OrderCancelledEvent.Reason.valueOf(reason.name()))));
+                        new OrderCancelledEvent(order.id(), order.customerId(), OrderCancelledEvent.Reason.valueOf(reason.name()))));
     }
 
     /**

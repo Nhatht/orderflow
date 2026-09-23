@@ -75,7 +75,7 @@ class OrderOutcomeConsumerIT extends AbstractInventoryIT {
         assertStock(product, 7, 3);
 
         send(Topics.ORDER_CANCELLED, orderId, EventEnvelope.of(OrderCancelledEvent.TYPE, orderId.toString(), "c",
-                new OrderCancelledEvent(orderId, OrderCancelledEvent.Reason.PAYMENT_DECLINED)));
+                new OrderCancelledEvent(orderId, UUID.randomUUID(), OrderCancelledEvent.Reason.PAYMENT_DECLINED)));
 
         var record = awaitReleased(orderId);
         EventEnvelope<StockReleasedEvent> event = objectMapper.readValue(record.value(), new TypeReference<>() {});
@@ -96,7 +96,7 @@ class OrderOutcomeConsumerIT extends AbstractInventoryIT {
         UUID orderId = reserve(product, 4);
 
         send(Topics.ORDER_CONFIRMED, orderId,
-                EventEnvelope.of(OrderConfirmedEvent.TYPE, orderId.toString(), "c", new OrderConfirmedEvent(orderId)));
+                EventEnvelope.of(OrderConfirmedEvent.TYPE, orderId.toString(), "c", new OrderConfirmedEvent(orderId, UUID.randomUUID())));
 
         awaitReservationStatus(orderId, "CONFIRMED");
         StockView stock = getStock.getByProductId(product);
@@ -111,7 +111,7 @@ class OrderOutcomeConsumerIT extends AbstractInventoryIT {
         UUID product = givenProductWithStock(10);
         UUID orderId = reserve(product, 3);
         var cancel = EventEnvelope.of(OrderCancelledEvent.TYPE, orderId.toString(), "c",
-                new OrderCancelledEvent(orderId, OrderCancelledEvent.Reason.PAYMENT_DECLINED));
+                new OrderCancelledEvent(orderId, UUID.randomUUID(), OrderCancelledEvent.Reason.PAYMENT_DECLINED));
 
         send(Topics.ORDER_CANCELLED, orderId, cancel);
         awaitReleased(orderId);
@@ -121,7 +121,7 @@ class OrderOutcomeConsumerIT extends AbstractInventoryIT {
         UUID sentinelProduct = givenProductWithStock(5);
         UUID sentinel = reserve(sentinelProduct, 1);
         send(Topics.ORDER_CANCELLED, orderId, EventEnvelope.of(OrderCancelledEvent.TYPE, sentinel.toString(), "c",
-                new OrderCancelledEvent(sentinel, OrderCancelledEvent.Reason.PAYMENT_DECLINED)));
+                new OrderCancelledEvent(sentinel, UUID.randomUUID(), OrderCancelledEvent.Reason.PAYMENT_DECLINED)));
         awaitReleased(sentinel);
 
         assertStock(product, 10, 0);   // không phải 13
@@ -134,13 +134,13 @@ class OrderOutcomeConsumerIT extends AbstractInventoryIT {
         UUID neverReserved = UUID.randomUUID();
         send(Topics.ORDER_CANCELLED, neverReserved, EventEnvelope.of(OrderCancelledEvent.TYPE,
                 neverReserved.toString(), "c",
-                new OrderCancelledEvent(neverReserved, OrderCancelledEvent.Reason.STOCK_UNAVAILABLE)));
+                new OrderCancelledEvent(neverReserved, UUID.randomUUID(), OrderCancelledEvent.Reason.STOCK_UNAVAILABLE)));
 
         // Lính canh cùng key: nếu đơn kia làm kẹt consumer, lính canh không bao giờ tới.
         UUID product = givenProductWithStock(5);
         UUID sentinel = reserve(product, 1);
         send(Topics.ORDER_CANCELLED, neverReserved, EventEnvelope.of(OrderCancelledEvent.TYPE, sentinel.toString(), "c",
-                new OrderCancelledEvent(sentinel, OrderCancelledEvent.Reason.PAYMENT_DECLINED)));
+                new OrderCancelledEvent(sentinel, UUID.randomUUID(), OrderCancelledEvent.Reason.PAYMENT_DECLINED)));
         awaitReleased(sentinel);
 
         assertThat(countReleased(neverReserved)).isZero();

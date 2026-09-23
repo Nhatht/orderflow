@@ -92,6 +92,18 @@ public class OrderSaga {
         moveTo(SagaStatus.COMPENSATED, Step.RELEASE_STOCK);
     }
 
+    /**
+     * Inventory tự thu hồi hàng vì phiếu giữ quá hạn, trong lúc saga còn chờ
+     * thanh toán. Hàng đã về kho — không còn gì để đền bù — nên kết thúc FAILED
+     * ngay. Tiền về sau đó là late response: orchestrator log REFUND REQUIRED.
+     */
+    public void reservationExpired() {
+        require(SagaStatus.AWAITING_PAYMENT, "reservationExpired");
+        log(Step.RESERVE_STOCK, Outcome.FAILED, "RESERVATION_EXPIRED");
+        this.failureReason = "RESERVATION_EXPIRED";
+        moveTo(SagaStatus.FAILED, Step.RESERVE_STOCK);
+    }
+
     // -------------------------------------------------------------------------
 
     private void require(SagaStatus expected, String action) {

@@ -43,6 +43,11 @@ public class KafkaConfig {
         return TopicBuilder.name(Topics.STOCK_RELEASED).partitions(3).replicas(1).build();
     }
 
+    @Bean
+    public NewTopic stockReservationExpiredTopic() {
+        return TopicBuilder.name(Topics.STOCK_RESERVATION_EXPIRED).partitions(3).replicas(1).build();
+    }
+
     /**
      * Chuyển chuỗi JSON thành kiểu mà tham số {@code @KafkaListener} khai báo.
      *

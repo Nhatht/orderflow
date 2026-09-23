@@ -23,4 +23,10 @@ public interface EventPublisherPort {
 
     /** PHẢI gọi trong transaction nhả hàng. {@code released} có thể rỗng — xem {@code StockReleasedEvent}. */
     void publishStockReleased(UUID orderId, List<ReservationView> released, String correlationId);
+
+    /**
+     * PHẢI gọi trong transaction nhả hàng quá hạn. Không có correlationId đầu
+     * vào — job tự kích hoạt, không đáp lại event nào — nên cài đặt tự sinh.
+     */
+    void publishStockReservationExpired(UUID orderId, List<ReservationView> expired);
 }

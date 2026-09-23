@@ -17,4 +17,7 @@ public interface OrderSagaUseCase {
     void onPaymentFailed(SagaReply reply);
 
     void onStockReleased(SagaReply reply);
+
+    /** Tuần 7: inventory tự nhả hàng vì phiếu giữ quá hạn. */
+    void onReservationExpired(SagaReply reply);
 }

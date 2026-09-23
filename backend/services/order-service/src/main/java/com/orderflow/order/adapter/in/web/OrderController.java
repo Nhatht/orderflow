@@ -7,6 +7,7 @@ import com.orderflow.order.application.dto.SagaView;
 import com.orderflow.order.application.port.in.GetOrderQuery;
 import com.orderflow.order.application.port.in.GetSagaQuery;
 import com.orderflow.order.application.port.in.PlaceOrderUseCase;
+import com.orderflow.order.domain.exception.OrderNotFoundException;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -55,9 +56,10 @@ public class OrderController {
     })
     public ResponseEntity<OrderView> placeOrder(
             @Valid @RequestBody PlaceOrderRequest request,
+            @RequestHeader(name = CUSTOMER_HEADER, required = false) UUID authenticatedCustomer,
             UriComponentsBuilder uriBuilder) {
 
-        OrderView order = placeOrderUseCase.placeOrder(request.toCommand());
+        OrderView order = placeOrderUseCase.placeOrder(request.toCommand(resolveCustomer(authenticatedCustomer, request.customerId())));
 
         // 201 Created kèm header Location trỏ tới tài nguyên vừa tạo — đúng chuẩn REST.
         URI location = uriBuilder.path("/api/orders/{id}")
@@ -74,8 +76,15 @@ public class OrderController {
             @ApiResponse(responseCode = "404", description = "Order not found",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
-    public OrderView getOrder(@PathVariable UUID orderId) {
-        return getOrderQuery.getById(orderId);
+    public OrderView getOrder(@PathVariable UUID orderId,
+                              @RequestHeader(name = CUSTOMER_HEADER, required = false) UUID authenticatedCustomer) {
+        OrderView order = getOrderQuery.getById(orderId);
+        // Chống IDOR: đoán được orderId của người khác thì cũng không xem được.
+        // Trả 404 chứ không 403 — 403 xác nhận "đơn này có tồn tại".
+        if (authenticatedCustomer != null && !authenticatedCustomer.equals(order.customerId())) {
+            throw new OrderNotFoundException(orderId);
+        }
+        return order;
     }
 
     @GetMapping("/{orderId}/saga")
@@ -89,7 +98,38 @@ public class OrderController {
     @GetMapping
     @Operation(summary = "List orders of a customer", description = "Newest first")
     @ResponseStatus(HttpStatus.OK)
-    public List<OrderView> getCustomerOrders(@RequestParam UUID customerId) {
-        return getOrderQuery.getByCustomer(customerId);
+    public List<OrderView> getCustomerOrders(
+            @RequestParam(required = false) UUID customerId,
+            @RequestHeader(name = CUSTOMER_HEADER, required = false) UUID authenticatedCustomer) {
+        return getOrderQuery.getByCustomer(resolveCustomer(authenticatedCustomer, customerId));
+    }
+
+    // ---- Danh tính khách hàng (tuần 7) --------------------------------------
+
+    /** Header do API Gateway gắn, lấy từ claim trong JWT đã xác thực. */
+    static final String CUSTOMER_HEADER = "X-Customer-Id";
+
+    /**
+     * Khách hàng là ai: tin HEADER của gateway, KHÔNG tin body/query của client.
+     *
+     * <p>Trước tuần 7, client tự khai {@code customerId} trong body — ai cũng đặt
+     * đơn được dưới tên người khác. Giờ gateway xác thực JWT rồi gắn
+     * {@code X-Customer-Id} (và XOÁ header cùng tên nếu client tự gửi lên). Có
+     * header thì nó thắng, giá trị client khai bị bỏ qua.
+     *
+     * <p>Không có header — gọi thẳng service, không qua gateway (test, dev) —
+     * thì dùng giá trị client khai để tương thích ngược. Điều này chỉ an toàn
+     * khi service KHÔNG lộ ra ngoài, mọi traffic từ internet đều phải qua
+     * gateway. Kiến trúc zero-trust sẽ bắt từng service tự kiểm tra JWT; ở đây
+     * chấp nhận tin mạng nội bộ — đơn giản hoá có chủ đích, ghi rõ.
+     */
+    private static UUID resolveCustomer(UUID fromGateway, UUID claimedByClient) {
+        if (fromGateway != null) {
+            return fromGateway;
+        }
+        if (claimedByClient == null) {
+            throw new IllegalArgumentException("customerId is required (or call through the API Gateway)");
+        }
+        return claimedByClient;
     }
 }

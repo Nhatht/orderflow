@@ -39,6 +39,9 @@ public final class Topics {
     /** inventory-service → order-service: đã nhả hàng về kho — bước đền bù HOÀN TẤT. */
     public static final String STOCK_RELEASED = "stock.released";
 
+    /** inventory-service → order-service: phiếu giữ hàng tự hết hạn, hàng đã về kho. */
+    public static final String STOCK_RESERVATION_EXPIRED = "stock.reservation-expired";
+
     // ---- Saga: thanh toán ---------------------------------------------------
 
     /** order-service → payment-service: lệnh thu tiền cho đơn đã giữ được hàng. */

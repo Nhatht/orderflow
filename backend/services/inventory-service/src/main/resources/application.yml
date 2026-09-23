@@ -90,6 +90,12 @@ orderflow:
     # đã bán cho người khác. Xem docs/PATTERNS.md, bẫy "late response".
     reservation-ttl: PT3M
 
+    expiry:
+      # Job nhả phiếu quá hạn chạy bao lâu một lần (ReservationExpiryJob).
+      # Phiếu sống 3 phút, nhả trễ tối đa 30 giây là chấp nhận được.
+      interval: PT30S
+      batch-size: 100
+
     lock:
       # Chờ tối đa để lấy khoá. Hết thời gian thì ném lỗi cho client thử lại,
       # KHÔNG chờ vô hạn — chờ vô hạn làm cạn thread pool và sập cả service.

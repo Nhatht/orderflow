@@ -81,6 +81,11 @@ public abstract class AbstractInventoryIT {
         registry.add("spring.data.redis.host", REDIS::getHost);
         registry.add("spring.data.redis.port", () -> REDIS.getMappedPort(6379));
         registry.add("spring.kafka.bootstrap-servers", KAFKA::getBootstrapServers);
+
+        // Job hết hạn tự chạy mỗi 30 giây sẽ chen vào giữa test và nhả phiếu
+        // mà test đang cố tình làm quá hạn. Đẩy chu kỳ ra xa; test gọi thẳng
+        // ExpireReservationsUseCase với "now" do nó kiểm soát.
+        registry.add("orderflow.inventory.expiry.interval", () -> "PT1H");
     }
 
     @Autowired

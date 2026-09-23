@@ -29,5 +29,5 @@ public interface EventPublisherPort {
 
     void publishOrderCancelled(Order order, CancellationReason reason, String correlationId);
 
-    enum CancellationReason { STOCK_UNAVAILABLE, PAYMENT_DECLINED }
+    enum CancellationReason { STOCK_UNAVAILABLE, PAYMENT_DECLINED, RESERVATION_EXPIRED }
 }

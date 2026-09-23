@@ -22,7 +22,8 @@ import java.util.UUID;
 @Schema(description = "Request to place a new order")
 public record PlaceOrderRequest(
 
-        @NotNull(message = "customerId is required")
+        // Không còn bắt buộc từ tuần 7: đi qua gateway thì khách hàng lấy từ JWT
+        // (header X-Customer-Id), giá trị ở đây bị bỏ qua. Xem OrderController.
         @Schema(example = "3fa85f64-5717-4562-b3fc-2c963f66afa6")
         UUID customerId,
 
@@ -55,8 +56,8 @@ public record PlaceOrderRequest(
             BigDecimal unitPrice
     ) {}
 
-    /** Dịch hợp đồng HTTP sang hợp đồng nghiệp vụ. */
-    public PlaceOrderCommand toCommand() {
+    /** Dịch hợp đồng HTTP sang hợp đồng nghiệp vụ, với khách hàng đã được xác định. */
+    public PlaceOrderCommand toCommand(UUID customerId) {
         List<PlaceOrderCommand.Item> commandItems = items.stream()
                 .map(i -> new PlaceOrderCommand.Item(
                         i.productId(), i.productName(), i.quantity(), i.unitPrice()))

@@ -104,6 +104,23 @@ public class OrderSagaOrchestrator implements OrderSagaUseCase {
                 (order, saga) -> saga.stockReleased());
     }
 
+    /**
+     * Phiếu giữ hàng hết hạn khi saga đang chờ thanh toán → huỷ đơn.
+     *
+     * <p>Chỉ xử lý ở AWAITING_PAYMENT. Ở STARTED (order-service tụt lại hơn 3
+     * phút, chưa kịp đọc stock.reserved) phản hồi này bị coi là cũ và bỏ qua —
+     * trường hợp hiếm, ghi thành điểm yếu đã biết thay vì làm phức tạp thêm luật
+     * chuyển trạng thái.
+     */
+    @Override
+    public void onReservationExpired(SagaReply reply) {
+        handle(reply, "saga-reservation-expired", SagaStatus.AWAITING_PAYMENT, (order, saga) -> {
+            order.cancel();
+            saga.reservationExpired();
+            eventPublisher.publishOrderCancelled(order, CancellationReason.RESERVATION_EXPIRED, reply.correlationId());
+        });
+    }
+
     // -------------------------------------------------------------------------
 
     private void handle(SagaReply reply, String operation, SagaStatus expected,

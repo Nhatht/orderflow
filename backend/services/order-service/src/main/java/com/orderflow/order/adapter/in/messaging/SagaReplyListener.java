@@ -3,6 +3,7 @@ package com.orderflow.order.adapter.in.messaging;
 import com.orderflow.contracts.EventEnvelope;
 import com.orderflow.contracts.Topics;
 import com.orderflow.contracts.inventory.StockReleasedEvent;
+import com.orderflow.contracts.inventory.StockReservationExpiredEvent;
 import com.orderflow.contracts.inventory.StockReservationFailedEvent;
 import com.orderflow.contracts.inventory.StockReservedEvent;
 import com.orderflow.contracts.payment.PaymentCompletedEvent;
@@ -60,6 +61,11 @@ public class SagaReplyListener {
     @KafkaListener(topics = Topics.STOCK_RELEASED)
     public void onStockReleased(EventEnvelope<StockReleasedEvent> e) {
         dispatch(e, e.payload().orderId(), null, saga::onStockReleased);
+    }
+
+    @KafkaListener(topics = Topics.STOCK_RESERVATION_EXPIRED)
+    public void onReservationExpired(EventEnvelope<StockReservationExpiredEvent> e) {
+        dispatch(e, e.payload().orderId(), "RESERVATION_EXPIRED", saga::onReservationExpired);
     }
 
     private void dispatch(EventEnvelope<?> envelope, UUID orderId, String detail, Consumer<SagaReply> handler) {

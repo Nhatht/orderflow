@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.orderflow.contracts.EventEnvelope;
 import com.orderflow.contracts.Topics;
 import com.orderflow.contracts.inventory.StockReleasedEvent;
+import com.orderflow.contracts.inventory.StockReservationExpiredEvent;
 import com.orderflow.contracts.inventory.StockReservationFailedEvent;
 import com.orderflow.contracts.inventory.StockReservedEvent;
 import com.orderflow.inventory.application.dto.ReservationOutcome;
@@ -71,6 +72,23 @@ public class OutboxEventPublisher implements EventPublisherPort {
                 .toList());
         append(Topics.STOCK_RELEASED,
                 EventEnvelope.of(StockReleasedEvent.TYPE, orderId.toString(), correlationId, payload));
+    }
+
+    /**
+     * correlationId tự sinh, tiền tố {@code expiry-}: phiếu giữ hàng không lưu
+     * correlationId của luồng gốc, nên không nối được vào luồng cũ. Tiền tố giúp
+     * grep log phân biệt ngay "event do job tự phát" với event đáp lại lệnh.
+     * (Muốn nối được thì phải lưu correlationId vào stock_reservations — chưa đáng.)
+     */
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void publishStockReservationExpired(UUID orderId, List<ReservationView> expired) {
+        var payload = new StockReservationExpiredEvent(orderId, expired.stream()
+                .map(r -> new StockReservationExpiredEvent.ExpiredItem(r.productId(), r.quantity()))
+                .toList());
+        append(Topics.STOCK_RESERVATION_EXPIRED,
+                EventEnvelope.of(StockReservationExpiredEvent.TYPE, orderId.toString(),
+                        "expiry-" + UUID.randomUUID(), payload));
     }
 
     /**
