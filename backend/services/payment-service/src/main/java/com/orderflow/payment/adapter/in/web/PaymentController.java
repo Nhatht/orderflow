@@ -24,6 +24,10 @@ import java.util.UUID;
  *
  * <p>Gọi thẳng repository port từ controller (không qua query use case) là
  * đơn giản hoá có chủ đích cho endpoint gỡ lỗi chỉ đọc.
+ *
+ * <p><b>Chỉ gọi được trong mạng nội bộ</b> — API Gateway cố ý không có route
+ * tới đây. Service không lưu customerId nên không kiểm được quyền sở hữu; mở ra
+ * ngoài thì ai đoán được orderId cũng xem được tiền của người khác (IDOR).
  */
 @RestController
 @RequestMapping("/api/payments")

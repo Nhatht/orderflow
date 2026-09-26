@@ -48,6 +48,11 @@ class GatewayIT {
             LAST_DOWNSTREAM_HEADERS.set(exchange.getRequestHeaders());
             byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "application/json");
+            // Như CorrelationIdFilter của order-service thật: trả lại correlation id.
+            String correlationId = exchange.getRequestHeaders().getFirst("X-Correlation-Id");
+            if (correlationId != null) {
+                exchange.getResponseHeaders().set("X-Correlation-Id", correlationId);
+            }
             exchange.sendResponseHeaders(200, body.length);
             exchange.getResponseBody().write(body);
             exchange.close();
@@ -60,6 +65,8 @@ class GatewayIT {
         registry.add("spring.data.redis.host", REDIS::getHost);
         registry.add("spring.data.redis.port", () -> REDIS.getMappedPort(6379));
         registry.add("ORDER_SERVICE_URL", () -> "http://localhost:" + FAKE_ORDER_SERVICE.getAddress().getPort());
+        registry.add("INVENTORY_SERVICE_URL", () -> "http://localhost:" + FAKE_ORDER_SERVICE.getAddress().getPort());
+        registry.add("PAYMENT_SERVICE_URL", () -> "http://localhost:" + FAKE_ORDER_SERVICE.getAddress().getPort());
         // Xô nhỏ để test thấy 429 nhanh: tối đa 3 request dồn, đổ lại 1 token/giây.
         registry.add("orderflow.gateway.rate-limit.replenish-rate", () -> "1");
         registry.add("orderflow.gateway.rate-limit.burst-capacity", () -> "3");
@@ -112,7 +119,32 @@ class GatewayIT {
                 .containsExactly("c0ffee00-0000-0000-0000-00000000a11c");
         String correlationId = downstream.getFirst("X-Correlation-Id");
         assertThat(correlationId).isNotBlank();
-        assertThat(response.getResponseHeaders().getFirst("X-Correlation-Id")).isEqualTo(correlationId);
+        assertThat(response.getResponseHeaders().get("X-Correlation-Id"))
+                .as("đúng MỘT giá trị — gateway và service phía sau cùng đặt header này")
+                .containsExactly(correlationId);
+    }
+
+    @Test
+    @DisplayName("Lệnh nội bộ của inventory, API gỡ lỗi của payment và endpoint quản lý route KHÔNG lọt ra ngoài, kể cả có token")
+    void internalEndpointsAreNotExposed() {
+        String token = login("alice", "alice123");
+
+        client.get().uri("/api/inventory/stock/abc").header("Authorization", "Bearer " + token)
+                .exchange().expectStatus().isOk();
+
+        for (String path : new String[] {"/api/inventory/reservations",
+                "/api/inventory/reservations/release", "/api/inventory/reservations/confirm"}) {
+            client.post().uri(path).header("Authorization", "Bearer " + token).bodyValue("{}")
+                    .exchange().expectStatus().isNotFound();
+        }
+
+        client.get().uri("/api/payments/by-order/abc").header("Authorization", "Bearer " + token)
+                .exchange().expectStatus().isNotFound();
+
+        client.get().uri("/actuator/gateway/routes").header("Authorization", "Bearer " + token)
+                .exchange().expectStatus().isNotFound();
+        client.post().uri("/actuator/gateway/refresh").header("Authorization", "Bearer " + token)
+                .exchange().expectStatus().isNotFound();
     }
 
     @Test

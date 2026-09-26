@@ -23,19 +23,27 @@ spring:
             redis-rate-limiter.burstCapacity: ${orderflow.gateway.rate-limit.burst-capacity:20}
             redis-rate-limiter.requestedTokens: 1
             key-resolver: "#{@userKeyResolver}"
+        # Gateway đặt X-Correlation-Id trên response (IdentityPropagationFilter),
+        # và order-service cũng trả lại header đó → client nhận HAI bản. Giữ một.
+        # (Phát hiện khi chạy thật toàn hệ thống tuần 8.)
+        - DedupeResponseHeader=X-Correlation-Id, RETAIN_FIRST
       routes:
         - id: order-service
           uri: ${ORDER_SERVICE_URL:http://localhost:8081}
           predicates:
             - Path=/api/orders/**
+        # CHỈ đọc tồn kho. /api/inventory/reservations/** là lệnh nội bộ của
+        # saga (giữ/nhả/chốt hàng) — mở ra ngoài thì một khách có token cũng giữ
+        # sạch kho bằng orderId bịa, hoặc nhả phiếu của người khác.
         - id: inventory-service
           uri: ${INVENTORY_SERVICE_URL:http://localhost:8082}
           predicates:
-            - Path=/api/inventory/**
-        - id: payment-service
-          uri: ${PAYMENT_SERVICE_URL:http://localhost:8083}
-          predicates:
-            - Path=/api/payments/**
+            - Path=/api/inventory/stock/**
+            - Method=GET
+        # KHÔNG có route tới payment-service. API của nó chỉ để gỡ lỗi, và nó
+        # không lưu customerId nên không kiểm được ai là chủ khoản thanh toán —
+        # mở ra ngoài thì ai cũng xem được tiền của đơn người khác (IDOR).
+        # Khách xem trạng thái thanh toán qua timeline saga của order-service.
 
 orderflow:
   gateway:
@@ -57,4 +65,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,gateway
+        # KHÔNG mở "gateway": endpoint đó cho POST/DELETE route lúc chạy — ai có
+        # token cũng thêm được route trỏ vào địa chỉ nội bộ bất kỳ (SSRF).
+        include: health,info,metrics
+
