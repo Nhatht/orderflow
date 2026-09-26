@@ -78,20 +78,16 @@ public class OrderController {
     })
     public OrderView getOrder(@PathVariable UUID orderId,
                               @RequestHeader(name = CUSTOMER_HEADER, required = false) UUID authenticatedCustomer) {
-        OrderView order = getOrderQuery.getById(orderId);
-        // Chống IDOR: đoán được orderId của người khác thì cũng không xem được.
-        // Trả 404 chứ không 403 — 403 xác nhận "đơn này có tồn tại".
-        if (authenticatedCustomer != null && !authenticatedCustomer.equals(order.customerId())) {
-            throw new OrderNotFoundException(orderId);
-        }
-        return order;
+        return ownedOrder(orderId, authenticatedCustomer);
     }
 
     @GetMapping("/{orderId}/saga")
     @Operation(summary = "Get the saga of an order",
             description = "Current saga status plus every step in the order it happened, "
                         + "including compensating steps. Source of the saga timeline in the UI.")
-    public SagaView getSaga(@PathVariable UUID orderId) {
+    public SagaView getSaga(@PathVariable UUID orderId,
+                            @RequestHeader(name = CUSTOMER_HEADER, required = false) UUID authenticatedCustomer) {
+        ownedOrder(orderId, authenticatedCustomer);
         return getSagaQuery.getByOrderId(orderId);
     }
 
@@ -108,6 +104,21 @@ public class OrderController {
 
     /** Header do API Gateway gắn, lấy từ claim trong JWT đã xác thực. */
     static final String CUSTOMER_HEADER = "X-Customer-Id";
+
+    /**
+     * Chống IDOR: đoán được orderId của người khác thì cũng không xem được đơn —
+     * hay BẤT CỨ thứ gì treo dưới đơn đó (saga...). Mọi endpoint có
+     * {@code {orderId}} trong đường dẫn phải đi qua đây.
+     *
+     * <p>Trả 404 chứ không 403 — 403 xác nhận "đơn này có tồn tại".
+     */
+    private OrderView ownedOrder(UUID orderId, UUID authenticatedCustomer) {
+        OrderView order = getOrderQuery.getById(orderId);
+        if (authenticatedCustomer != null && !authenticatedCustomer.equals(order.customerId())) {
+            throw new OrderNotFoundException(orderId);
+        }
+        return order;
+    }
 
     /**
      * Khách hàng là ai: tin HEADER của gateway, KHÔNG tin body/query của client.

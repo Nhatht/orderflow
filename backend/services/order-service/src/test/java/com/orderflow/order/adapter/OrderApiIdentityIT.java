@@ -81,6 +81,21 @@ class OrderApiIdentityIT extends AbstractOrderIT {
     }
 
     @Test
+    @DisplayName("Xem saga của đơn người khác → 404; thêm /saga vào đường dẫn không lách được")
+    void cannotReadSomeoneElsesSaga() throws Exception {
+        UUID owner = UUID.randomUUID();
+        MvcResult created = mvc.perform(post("/api/orders").contentType(MediaType.APPLICATION_JSON)
+                        .header("X-Customer-Id", owner).content(body(null)))
+                .andExpect(status().isCreated()).andReturn();
+        String orderId = json(created).get("id").asText();
+
+        mvc.perform(get("/api/orders/{id}/saga", orderId).header("X-Customer-Id", UUID.randomUUID()))
+                .andExpect(status().isNotFound());
+        mvc.perform(get("/api/orders/{id}/saga", orderId).header("X-Customer-Id", owner))
+                .andExpect(status().isOk());
+    }
+
+    @Test
     @DisplayName("X-Correlation-Id từ gateway chảy vào order.created — nối request HTTP với cả saga")
     void correlationIdFlowsIntoOrderCreated() throws Exception {
         try (var consumer = orderCreatedConsumer()) {

@@ -156,6 +156,25 @@ class OrderNotificationIT {
         assertThat(ledgerStatus(orderId)).isEqualTo("SENT");
     }
 
+    @Test
+    @DisplayName("Event cũ (trước tuần 7) không có customerId → bỏ qua, không gửi tới customer-null")
+    void legacyEventWithoutCustomerIsSkipped() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        send(Topics.ORDER_CONFIRMED, orderId, EventEnvelope.of(OrderConfirmedEvent.TYPE, orderId.toString(), "c",
+                new OrderConfirmedEvent(orderId, null)));
+
+        // Lính canh cùng key → cùng partition → xử lý SAU event cũ.
+        UUID sentinelOrder = UUID.randomUUID();
+        UUID sentinelCustomer = UUID.randomUUID();
+        send(Topics.ORDER_CONFIRMED, orderId, EventEnvelope.of(OrderConfirmedEvent.TYPE, sentinelOrder.toString(), "c",
+                new OrderConfirmedEvent(sentinelOrder, sentinelCustomer)));
+        awaitMailCount(sentinelCustomer, 1);
+
+        assertThat(mailCount("customer-null@orderflow.local")).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM notifications WHERE order_id = ?", Integer.class, orderId))
+                .isZero();
+    }
+
     // ---- helper ------------------------------------------------------------
 
     private void send(String topic, UUID key, EventEnvelope<?> envelope) throws Exception {
@@ -168,7 +187,11 @@ class OrderNotificationIT {
 
     /** Hỏi MailHog: đã nhận bao nhiêu thư gửi tới khách này. */
     private int mailCount(UUID customer) throws Exception {
-        String to = URLEncoder.encode("customer-%s@orderflow.local".formatted(customer), StandardCharsets.UTF_8);
+        return mailCount("customer-%s@orderflow.local".formatted(customer));
+    }
+
+    private int mailCount(String recipient) throws Exception {
+        String to = URLEncoder.encode(recipient, StandardCharsets.UTF_8);
         var request = HttpRequest.newBuilder(URI.create("http://%s:%d/api/v2/search?kind=to&query=%s"
                 .formatted(MAILHOG.getHost(), MAILHOG.getMappedPort(8025), to))).GET().build();
         JsonNode body = objectMapper.readTree(http.send(request, HttpResponse.BodyHandlers.ofString()).body());

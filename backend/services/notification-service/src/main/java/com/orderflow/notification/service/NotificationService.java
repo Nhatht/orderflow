@@ -43,6 +43,14 @@ public class NotificationService {
     }
 
     public void notify(UUID eventId, UUID orderId, UUID customerId, Kind kind, String detail) {
+        if (customerId == null) {
+            // Event phát trước tuần 7 chưa có customerId. Consumer group mới đọc
+            // từ đầu topic (earliest) nên sẽ gặp chúng. Không biết gửi cho ai →
+            // bỏ qua. KHÔNG ném lỗi: thử lại cũng không bao giờ có customerId,
+            // chỉ làm retry vô ích rồi rác trong DLT.
+            log.warn("Event {} for order={} has no customerId (published before week 7), skipping", eventId, orderId);
+            return;
+        }
         String recipient = "customer-%s@orderflow.local".formatted(customerId);
 
         if (ledger.recordIntentAndCheckSent(eventId, orderId, kind.name(), recipient)) {
