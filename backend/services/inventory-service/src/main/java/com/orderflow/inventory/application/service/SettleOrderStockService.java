@@ -7,7 +7,9 @@ import com.orderflow.inventory.application.port.out.EventPublisherPort;
 import com.orderflow.inventory.application.port.out.ProcessedEventPort;
 import com.orderflow.inventory.application.port.out.ReservationRepositoryPort;
 import com.orderflow.inventory.application.port.out.StockRepositoryPort;
+import com.orderflow.inventory.domain.exception.InsufficientStockException;
 import com.orderflow.inventory.domain.exception.StockNotFoundException;
+import com.orderflow.inventory.domain.model.ReservationStatus;
 import com.orderflow.inventory.domain.model.Stock;
 import com.orderflow.inventory.domain.model.StockReservation;
 import lombok.extern.slf4j.Slf4j;
@@ -22,6 +24,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -68,12 +71,49 @@ public class SettleOrderStockService implements SettleOrderStockUseCase {
         this.lockLeaseTime = lockLeaseTime;
     }
 
+    /**
+     * Chốt hàng. Ngoài phiếu HELD, còn nhận cả phiếu EXPIRED — <b>phương án D</b>
+     * trong {@code docs/SAGA-TIMEOUT.md}: lưới an toàn cho cuộc đua giữa job
+     * hết hạn và {@code order.confirmed}.
+     *
+     * <p>Cuộc đua: saga đã nhận tiền và phát {@code order.confirmed}, nhưng trước
+     * khi inventory đọc tới event đó (inventory tụt lại, hoặc order-service sập
+     * quá TTL rồi mới xử lý tiền về), job đã thấy phiếu quá hạn và trả hàng về
+     * kệ. Trước đây đường chốt BỎ QUA phiếu EXPIRED mà không báo gì: đơn đã trả
+     * tiền, hàng không bị trừ — oversell âm thầm.
+     */
     @Override
     public void confirmForOrder(UUID idempotencyKey, String correlationId, UUID orderId) {
-        settle(idempotencyKey, orderId, "confirm-order-stock", (stock, reservation) -> {
-            stock.confirm(reservation.quantity());     // hàng rời kho: chỉ trừ cột reserved
-            reservation.confirm();
-        }, settled -> { /* chốt đơn không cần báo lại ai */ });
+        settle(idempotencyKey, orderId, "confirm-order-stock",
+                r -> r.status().isActive() || r.status() == ReservationStatus.EXPIRED,
+                (stock, reservation) -> {
+                    if (reservation.status() == ReservationStatus.EXPIRED) {
+                        reclaimExpired(orderId, stock, reservation);
+                    } else {
+                        stock.confirm(reservation.quantity());     // hàng rời kho: chỉ trừ cột reserved
+                        reservation.confirm();
+                    }
+                }, settled -> { /* chốt đơn không cần báo lại ai */ });
+    }
+
+    /**
+     * Còn hàng → lấy lại từ {@code available}, khách không hề biết. Hết hàng (đã
+     * bán cho người khác trong lúc phiếu hết hạn) → OVERSOLD: log ERROR để người
+     * vận hành hoàn tiền hoặc nhập thêm hàng. KHÔNG ném lỗi — thử lại cũng không
+     * tự sinh ra hàng, chỉ làm kẹt partition.
+     */
+    private void reclaimExpired(UUID orderId, Stock stock, StockReservation reservation) {
+        try {
+            stock.confirmFromAvailable(reservation.quantity());
+            reservation.confirmAfterExpiry();
+            log.warn("RECLAIMED: order={} product={} qty={} was confirmed after its reservation expired; "
+                            + "stock taken back from available",
+                    orderId, reservation.productId(), reservation.quantity());
+        } catch (InsufficientStockException e) {
+            log.error("OVERSOLD: order={} product={} qty={} was paid and confirmed but its reservation expired "
+                            + "and only {} left — REFUND OR RESTOCK REQUIRED",
+                    orderId, reservation.productId(), reservation.quantity(), stock.availableQty());
+        }
     }
 
     /**
@@ -85,7 +125,7 @@ public class SettleOrderStockService implements SettleOrderStockUseCase {
      */
     @Override
     public void releaseForOrder(UUID idempotencyKey, String correlationId, UUID orderId, boolean sagaAwaitsAck) {
-        settle(idempotencyKey, orderId, "release-order-stock", (stock, reservation) -> {
+        settle(idempotencyKey, orderId, "release-order-stock", r -> r.status().isActive(), (stock, reservation) -> {
             stock.release(reservation.quantity());     // ĐỀN BÙ: reserved → available
             reservation.release();
         }, released -> {
@@ -95,12 +135,17 @@ public class SettleOrderStockService implements SettleOrderStockUseCase {
         });
     }
 
+    /**
+     * @param eligible phiếu nào được xử lý — nhả chỉ đụng phiếu HELD, chốt thì
+     *        đụng cả phiếu EXPIRED (phương án D)
+     */
     private void settle(UUID idempotencyKey, UUID orderId, String operation,
+                        Predicate<StockReservation> eligible,
                         BiConsumer<Stock, StockReservation> apply,
                         Consumer<List<ReservationView>> onSettled) {
         // Đọc NGOÀI khoá chỉ để biết cần khoá sản phẩm nào.
         Set<UUID> lockedProducts = reservationRepository.findByOrderId(orderId).stream()
-                .filter(r -> r.status().isActive())
+                .filter(eligible)
                 .map(StockReservation::productId)
                 .collect(Collectors.toSet());
 
@@ -114,7 +159,7 @@ public class SettleOrderStockService implements SettleOrderStockUseCase {
 
             List<ReservationView> settled = new ArrayList<>();
             for (StockReservation reservation : reservationRepository.findByOrderId(orderId)) {
-                if (!reservation.status().isActive()) {
+                if (!eligible.test(reservation)) {
                     continue;
                 }
                 // Đọc lại BÊN TRONG khoá; nếu xuất hiện phiếu của sản phẩm mà ta

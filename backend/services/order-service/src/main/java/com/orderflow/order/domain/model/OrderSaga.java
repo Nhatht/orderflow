@@ -86,6 +86,22 @@ public class OrderSaga {
         log(Step.RELEASE_STOCK, Outcome.REQUESTED, null);
     }
 
+    /**
+     * Chờ tiền quá hạn (saga timeout) → đền bù như thanh toán thất bại.
+     *
+     * <p>Khác {@link #reservationExpired()}: ở đây hàng VẪN đang được giữ, vì
+     * saga timeout (3 phút) ngắn hơn hẳn TTL của phiếu (30 phút) — saga là bên
+     * quyết định trước. Nên phải CHỦ ĐỘNG nhả hàng rồi chờ {@code stock.released}.
+     * Xem {@code docs/SAGA-TIMEOUT.md}.
+     */
+    public void paymentTimedOut() {
+        require(SagaStatus.AWAITING_PAYMENT, "paymentTimedOut");
+        log(Step.PROCESS_PAYMENT, Outcome.FAILED, "PAYMENT_TIMEOUT");
+        this.failureReason = "PAYMENT_TIMEOUT";
+        moveTo(SagaStatus.COMPENSATING, Step.RELEASE_STOCK);
+        log(Step.RELEASE_STOCK, Outcome.REQUESTED, null);
+    }
+
     public void stockReleased() {
         require(SagaStatus.COMPENSATING, "stockReleased");
         log(Step.RELEASE_STOCK, Outcome.SUCCEEDED, null);

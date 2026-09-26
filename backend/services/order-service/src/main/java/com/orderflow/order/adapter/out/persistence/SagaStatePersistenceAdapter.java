@@ -9,6 +9,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -80,6 +81,32 @@ public class SagaStatePersistenceAdapter implements SagaStateRepositoryPort {
                         rs.getTimestamp("updated_at").toInstant(),
                         rs.getLong("version")),
                 orderId).stream().findFirst();
+    }
+
+    /**
+     * Đọc thêm bảng {@code outbox} — cùng {@code order_db}, nên không vi phạm
+     * "mỗi service một database". Viết thành "KHÔNG tồn tại lệnh thu tiền chưa
+     * gửi hoặc mới gửi" thay vì "tồn tại lệnh đã gửi trước mốc": dòng outbox đã
+     * gửi bị job dọn xoá sau 7 ngày, và saga chờ lâu hơn thế vẫn phải timeout được.
+     *
+     * <p>{@code updated_at < ?} vẫn giữ để dùng index {@code (status, updated_at)}:
+     * lệnh không thể được gửi trước khi saga vào AWAITING_PAYMENT.
+     */
+    @Override
+    public List<UUID> findAwaitingPaymentRequestedBefore(Instant sentBefore, int limit) {
+        Timestamp cutoff = Timestamp.from(sentBefore);
+        return jdbc.queryForList("""
+                        SELECT s.order_id FROM saga_state s
+                        WHERE s.status = 'AWAITING_PAYMENT' AND s.updated_at < ?
+                          AND NOT EXISTS (
+                              SELECT 1 FROM outbox o
+                              WHERE o.aggregate_id = s.order_id::text
+                                AND o.topic = 'payment.requested'
+                                AND (o.published_at IS NULL OR o.published_at >= ?))
+                        ORDER BY s.updated_at
+                        LIMIT ?
+                        """,
+                UUID.class, cutoff, cutoff, limit);
     }
 
     @Override

@@ -41,18 +41,16 @@ import java.util.stream.Collectors;
  *       toán thì huỷ đơn; đã xong rồi thì bỏ qua.</li>
  * </ol>
  *
- * <h2>Rủi ro chấp nhận — và cách bịt</h2>
- * <b>Late response:</b> nhả hàng xong, saga huỷ đơn, rồi tiền mới về → saga
- * log {@code LATE PAYMENT ... REFUND REQUIRED}. TTL 3 phút đặt theo p99 thời
- * gian thanh toán (khách nhập OTP 30–90 giây) để việc này hiếm, không phải
- * không thể.
+ * <h2>Job này KHÔNG phải đồng hồ chính</h2>
+ * Người quyết "chờ tiền bao lâu" là saga timeout ở order-service (3 phút).
+ * TTL phiếu (30 phút) dài hơn nhiều, nên với đơn còn saga sống, saga luôn chốt
+ * hoặc huỷ TRƯỚC khi job này đụng tới. Job chỉ còn làm lưới an toàn cho đơn mồ
+ * côi (saga chết, hoặc đơn tạo trước khi có saga). Xem {@code docs/SAGA-TIMEOUT.md}.
  *
- * <p><b>Đảo thứ tự — CHƯA bịt:</b> saga đã nhận tiền và phát
- * {@code order.confirmed}, nhưng job chạy trước khi inventory đọc event đó
- * (inventory sập vài phút rồi khởi động lại). Chốt đơn khi đó không còn phiếu
- * HELD nào nên không trừ kho — đơn đã trả tiền nhưng hàng đã về kệ. Cách bịt dự
- * kiến: đường chốt đơn gặp phiếu EXPIRED thì lấy lại hàng từ kho, hết hàng thì
- * log OVERSOLD cho người xử lý.
+ * <p><b>Đảo thứ tự — nay đã bịt:</b> nếu order-service sập lâu hơn TTL, job vẫn
+ * có thể nhả hàng của một đơn mà saga sau đó mới chốt. Đường chốt đơn
+ * ({@code SettleOrderStockService.confirmForOrder}) gặp phiếu EXPIRED thì lấy
+ * lại hàng từ kho; hết hàng thì log OVERSOLD cho người xử lý.
  *
  * <h2>Vì sao an toàn khi nhiều instance cùng chạy job</h2>
  * Không cần ShedLock: mỗi đơn được khoá (cùng khoá Redis với mọi đường giữ/nhả

@@ -84,15 +84,19 @@ orderflow:
   inventory:
     # Phiếu giữ hàng sống bao lâu trước khi job dọn dẹp nhả về kho.
     #
-    # 3 PHÚT, KHÔNG PHẢI 30 GIÂY. Khách phải mở app ngân hàng và nhập OTP,
-    # thực tế mất 30-90 giây. Đặt quá ngắn sẽ huỷ nhầm đơn hợp lệ, rồi
-    # PaymentCompleted về muộn -> khách bị trừ tiền mà đơn đã huỷ và hàng
-    # đã bán cho người khác. Xem docs/PATTERNS.md, bẫy "late response".
-    reservation-ttl: PT3M
+    # 30 PHÚT — đây chỉ là LƯỚI AN TOÀN, không phải đồng hồ chính. Người quyết
+    # "chờ tiền bao lâu" là saga (orderflow.saga.payment-timeout = 3 phút ở
+    # order-service). Hai đồng hồ cùng 3 phút thì chúng ĐUA nhau: job nhả hàng
+    # đúng lúc saga vừa chốt đơn → đơn đã trả tiền mà hàng về kệ.
+    #
+    # BẤT BIẾN: reservation-ttl > payment-timeout + thời gian order-service có
+    # thể sập mà chưa ai sửa. Vi phạm là cuộc đua quay lại (khi đó chỉ còn lưới
+    # cuối: chốt đơn gặp phiếu EXPIRED thì lấy lại hàng / log OVERSOLD).
+    # Xem docs/SAGA-TIMEOUT.md.
+    reservation-ttl: PT30M
 
     expiry:
       # Job nhả phiếu quá hạn chạy bao lâu một lần (ReservationExpiryJob).
-      # Phiếu sống 3 phút, nhả trễ tối đa 30 giây là chấp nhận được.
       interval: PT30S
       batch-size: 100
 
@@ -123,3 +127,4 @@ springdoc:
 logging:
   level:
     com.orderflow: DEBUG
+

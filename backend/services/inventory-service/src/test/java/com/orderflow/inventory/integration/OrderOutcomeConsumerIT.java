@@ -10,6 +10,7 @@ import com.orderflow.contracts.order.OrderConfirmedEvent;
 import com.orderflow.inventory.application.dto.ReservationOutcome;
 import com.orderflow.inventory.application.dto.ReserveOrderStockCommand;
 import com.orderflow.inventory.application.dto.StockView;
+import com.orderflow.inventory.application.port.in.ExpireReservationsUseCase;
 import com.orderflow.inventory.application.port.in.GetStockQuery;
 import com.orderflow.inventory.application.port.in.ReserveOrderStockUseCase;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -43,6 +44,7 @@ class OrderOutcomeConsumerIT extends AbstractInventoryIT {
 
     @Autowired ReserveOrderStockUseCase reserveOrderStock;
     @Autowired GetStockQuery getStock;
+    @Autowired ExpireReservationsUseCase expireReservations;
     @Autowired KafkaTemplate<String, String> kafkaTemplate;
     @Autowired ObjectMapper objectMapper;
 
@@ -161,7 +163,74 @@ class OrderOutcomeConsumerIT extends AbstractInventoryIT {
         assertThat(event.payload().items()).isEmpty();
     }
 
+    @Test
+    @DisplayName("Huỷ vì saga timeout → nhả hàng VÀ phát stock.released (saga đang chờ ở COMPENSATING)")
+    void paymentTimeoutReleasesAndAcknowledges() throws Exception {
+        UUID product = givenProductWithStock(10);
+        UUID orderId = reserve(product, 3);
+
+        send(Topics.ORDER_CANCELLED, orderId, EventEnvelope.of(OrderCancelledEvent.TYPE, orderId.toString(), "c",
+                new OrderCancelledEvent(orderId, UUID.randomUUID(), OrderCancelledEvent.Reason.PAYMENT_TIMEOUT)));
+
+        awaitReleased(orderId);
+        assertStock(product, 10, 0);
+
+        // Bẫy: không còn gì để nhả (phiếu đã bị job trả trước) mà inventory im
+        // lặng thì saga kẹt COMPENSATING mãi. Phải vẫn phát, như PAYMENT_DECLINED.
+        UUID nothingHeld = UUID.randomUUID();
+        send(Topics.ORDER_CANCELLED, nothingHeld, EventEnvelope.of(OrderCancelledEvent.TYPE, nothingHeld.toString(), "c",
+                new OrderCancelledEvent(nothingHeld, UUID.randomUUID(), OrderCancelledEvent.Reason.PAYMENT_TIMEOUT)));
+        awaitReleased(nothingHeld);
+    }
+
+    @Test
+    @DisplayName("Phương án D: order.confirmed tới SAU khi phiếu hết hạn, còn hàng → lấy lại hàng, phiếu CONFIRMED")
+    void confirmationAfterExpiryReclaimsStock() throws Exception {
+        UUID product = givenProductWithStock(10);
+        UUID orderId = reserve(product, 4);
+        expire(orderId);
+        assertStock(product, 10, 0);   // job đã trả hàng về kệ
+
+        send(Topics.ORDER_CONFIRMED, orderId, EventEnvelope.of(OrderConfirmedEvent.TYPE, orderId.toString(), "c",
+                new OrderConfirmedEvent(orderId, UUID.randomUUID())));
+
+        awaitReservationStatus(orderId, "CONFIRMED");
+        assertStock(product, 6, 0);
+    }
+
+    @Test
+    @DisplayName("Phương án D: order.confirmed tới SAU khi phiếu hết hạn, hàng đã bán mất → OVERSOLD, không đụng hàng người khác")
+    void confirmationAfterExpiryWhenSoldOut() throws Exception {
+        UUID product = givenProductWithStock(1);
+        UUID late = reserve(product, 1);
+        expire(late);
+        UUID someoneElse = reserve(product, 1);   // món duy nhất đã về tay người khác
+        assertStock(product, 0, 1);
+
+        send(Topics.ORDER_CONFIRMED, late, EventEnvelope.of(OrderConfirmedEvent.TYPE, late.toString(), "c",
+                new OrderConfirmedEvent(late, UUID.randomUUID())));
+
+        // Lính canh cùng key → cùng partition → xử lý SAU đơn kia.
+        UUID sentinel = reserve(givenProductWithStock(5), 1);
+        send(Topics.ORDER_CONFIRMED, late, EventEnvelope.of(OrderConfirmedEvent.TYPE, sentinel.toString(), "c",
+                new OrderConfirmedEvent(sentinel, UUID.randomUUID())));
+        awaitReservationStatus(sentinel, "CONFIRMED");
+
+        assertThat(reservationStatus(late)).as("không lấy được hàng → phiếu giữ nguyên EXPIRED").isEqualTo("EXPIRED");
+        assertThat(reservationStatus(someoneElse)).isEqualTo("HELD");
+        assertStock(product, 0, 1);
+    }
+
     // ---- helper ------------------------------------------------------------
+
+    /** Cho phiếu quá hạn rồi chạy job hết hạn một lần — như lúc job thắng cuộc đua. */
+    private void expire(UUID orderId) {
+        jdbc.update("UPDATE stock_reservations SET expires_at = ? WHERE order_id = ?",
+                java.sql.Timestamp.from(Instant.now().minusSeconds(60)), orderId);
+        expireReservations.expireDue(Instant.now());
+        assertThat(reservationStatus(orderId)).isEqualTo("EXPIRED");
+    }
+
 
     private UUID reserve(UUID product, int quantity) {
         UUID orderId = UUID.randomUUID();

@@ -19,6 +19,16 @@ public interface SagaStateRepositoryPort {
 
     Optional<OrderSaga> findByOrderId(UUID orderId);
 
+    /**
+     * Saga chờ tiền mà lệnh {@code payment.requested} của nó ĐÃ LÊN KAFKA trước
+     * {@code sentBefore} — cũ nhất trước.
+     *
+     * <p>Tính giờ từ lúc lệnh thật sự rời đi, KHÔNG từ lúc saga ghi lệnh vào
+     * outbox: Kafka hay poller ngừng vài phút thì payment chưa hề nhận lệnh, huỷ
+     * lúc đó là phạt khách vì lỗi của chính hệ thống (review tuần 8).
+     */
+    List<UUID> findAwaitingPaymentRequestedBefore(Instant sentBefore, int limit);
+
     /** Toàn bộ nhật ký các bước, theo thứ tự xảy ra — cho saga timeline. */
     List<StepRecord> history(UUID orderId);
 

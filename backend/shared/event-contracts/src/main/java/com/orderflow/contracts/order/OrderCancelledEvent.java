@@ -23,6 +23,12 @@ public record OrderCancelledEvent(UUID orderId, UUID customerId, Reason reason) 
         /** Thanh toán bị từ chối — phải nhả hàng đã giữ. */
         PAYMENT_DECLINED,
         /** Phiếu giữ hàng hết hạn trước khi thanh toán xong — hàng đã tự về kho. */
-        RESERVATION_EXPIRED
+        RESERVATION_EXPIRED,
+        /**
+         * Saga chờ tiền quá hạn (saga timeout) — phải nhả hàng đã giữ. Khác
+         * RESERVATION_EXPIRED ở chỗ hàng VẪN đang được giữ: saga ra quyết định
+         * trước TTL của phiếu. Xem {@code docs/SAGA-TIMEOUT.md}.
+         */
+        PAYMENT_TIMEOUT
     }
 }

@@ -15,7 +15,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.UUID;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 /**
  * SAGA ORCHESTRATOR — trái tim của dự án.
@@ -121,6 +123,36 @@ public class OrderSagaOrchestrator implements OrderSagaUseCase {
         });
     }
 
+    /**
+     * SAGA TIMEOUT (phương án A trong {@code docs/SAGA-TIMEOUT.md}) — saga giữ
+     * đồng hồ chính, ngắn hơn TTL phiếu giữ hàng, nên nó quyết trước job hết
+     * hạn của inventory và hai bên không còn đua nhau.
+     *
+     * <p><b>Đua với {@code payment.completed}</b> vẫn có thể xảy ra, nhưng giờ nằm
+     * trên MỘT dòng {@code saga_state}: cả hai cùng đọc version N, bên ghi sau
+     * nhận 0 dòng → {@code OptimisticLockingFailureException} → rollback.
+     * Listener thua thì Kafka giao lại → thấy COMPENSATING → LATE PAYMENT. Job
+     * thua thì lần quét sau saga đã COMPLETED, không còn trong danh sách. Bên
+     * nào thắng cũng ra kết quả nhất quán.
+     */
+    @Override
+    public boolean onPaymentTimeout(UUID orderId) {
+        Boolean timedOut = tx.execute(status -> advance(orderId, "saga-payment-timeout", SagaStatus.AWAITING_PAYMENT,
+                (order, saga) -> {
+                    order.cancel();
+                    saga.paymentTimedOut();
+                    // ĐỀN BÙ: hàng vẫn đang được giữ (TTL phiếu dài hơn) — phải nhả.
+                    // correlationId: saga_state không lưu correlationId của request
+                    // gốc; tự sinh có tiền tố như job hết hạn bên inventory.
+                    eventPublisher.publishOrderCancelled(order, CancellationReason.PAYMENT_TIMEOUT,
+                            "saga-timeout-" + UUID.randomUUID());
+                },
+                // Không phải lỗi: tiền vừa về, hoặc instance khác vừa huỷ xong.
+                current -> log.info("saga-payment-timeout: order={} saga is already {}, nothing to do",
+                        orderId, current)));
+        return Boolean.TRUE.equals(timedOut);
+    }
+
     // -------------------------------------------------------------------------
 
     private void handle(SagaReply reply, String operation, SagaStatus expected,
@@ -131,26 +163,39 @@ public class OrderSagaOrchestrator implements OrderSagaUseCase {
                         operation, reply.eventId(), reply.orderId());
                 return;
             }
-
-            var order = orders.findById(reply.orderId());
-            var saga = sagas.findByOrderId(reply.orderId());
-            if (order.isEmpty() || saga.isEmpty()) {
-                log.warn("{}: no order/saga for order={}, ignoring", operation, reply.orderId());
-                return;
-            }
-
-            SagaStatus current = saga.get().status();
-            if (current != expected) {
-                warnOutOfOrder(operation, reply, current, expected);
-                return;
-            }
-
-            step.accept(order.get(), saga.get());
-            orders.save(order.get());
-            sagas.save(saga.get());
-
-            log.info("{}: order={} saga {} -> {}", operation, reply.orderId(), current, saga.get().status());
+            advance(reply.orderId(), operation, expected, step,
+                    current -> warnOutOfOrder(operation, reply, current, expected));
         });
+    }
+
+    /**
+     * Load → kiểm trạng thái → chạy bước → lưu. Phải gọi TRONG transaction.
+     * Tách khỏi {@link #handle} vì saga timeout không có event (nên không có
+     * eventId để ghi sổ {@code processed_events}) nhưng dùng đúng khuôn này.
+     *
+     * @return {@code true} nếu bước đã được áp dụng
+     */
+    private boolean advance(UUID orderId, String operation, SagaStatus expected,
+                            BiConsumer<Order, OrderSaga> step, Consumer<SagaStatus> onUnexpectedStatus) {
+        var order = orders.findById(orderId);
+        var saga = sagas.findByOrderId(orderId);
+        if (order.isEmpty() || saga.isEmpty()) {
+            log.warn("{}: no order/saga for order={}, ignoring", operation, orderId);
+            return false;
+        }
+
+        SagaStatus current = saga.get().status();
+        if (current != expected) {
+            onUnexpectedStatus.accept(current);
+            return false;
+        }
+
+        step.accept(order.get(), saga.get());
+        orders.save(order.get());
+        sagas.save(saga.get());
+
+        log.info("{}: order={} saga {} -> {}", operation, orderId, current, saga.get().status());
+        return true;
     }
 
     private void warnOutOfOrder(String operation, SagaReply reply, SagaStatus current, SagaStatus expected) {

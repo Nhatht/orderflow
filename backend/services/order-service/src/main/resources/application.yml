@@ -95,6 +95,22 @@ orderflow:
     retention: P7D          # giữ dòng đã gửi 7 ngày để tra cứu, rồi xoá
     cleanup-cron: "0 0 3 * * *"
 
+  # ===========================================================================
+  # Saga timeout — xem docs/SAGA-TIMEOUT.md, phương án A
+  # ===========================================================================
+  saga:
+    # ĐỒNG HỒ CHÍNH: chờ tiền quá lâu thì saga tự huỷ đơn và nhả hàng.
+    # 3 phút theo p99 thời gian thanh toán (khách mở app ngân hàng, nhập OTP).
+    # BẤT BIẾN: phải NGẮN HƠN NHIỀU orderflow.inventory.reservation-ttl (30 phút)
+    # để saga luôn quyết trước khi phiếu giữ hàng tự hết hạn.
+    payment-timeout: PT3M
+    timeout:
+      scan-interval: PT30S
+      # Sau khi khởi động, chờ listener đọc hết phản hồi tồn trong Kafka rồi mới
+      # quét — tránh huỷ oan đơn đã trả tiền trong lúc service sập.
+      initial-delay: PT2M
+      batch-size: 100
+
 management:
   endpoints:
     web:
@@ -103,9 +119,6 @@ management:
   endpoint:
     health:
       show-details: always
-  tracing:
-    sampling:
-      probability: 1.0   # dev lấy mẫu 100%; production nên hạ xuống
 
 springdoc:
   swagger-ui:
@@ -118,3 +131,4 @@ logging:
   level:
     com.orderflow: DEBUG
     org.hibernate.SQL: INFO
+

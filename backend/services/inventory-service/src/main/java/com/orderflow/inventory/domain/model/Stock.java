@@ -110,6 +110,26 @@ public class Stock {
         touch();
     }
 
+    /**
+     * Chốt đơn khi phiếu giữ hàng ĐÃ HẾT HẠN — lưới an toàn cuối (phương án D,
+     * xem {@code docs/SAGA-TIMEOUT.md}).
+     *
+     * <p>Hàng của đơn đã bị job hết hạn trả về {@code available}, nhưng đơn lại
+     * đã được trả tiền và chốt. Lấy lại hàng thẳng từ {@code available}: tổng
+     * tồn kho giảm y như {@link #confirm(int)}, chỉ khác cột bị trừ.
+     *
+     * @throws InsufficientStockException khi hàng đã bán cho người khác mất —
+     *         đây là OVERSELL thật, người gọi phải báo động
+     */
+    public void confirmFromAvailable(int quantity) {
+        requirePositive(quantity);
+        if (availableQty < quantity) {
+            throw new InsufficientStockException(productId, quantity, availableQty);
+        }
+        availableQty -= quantity;
+        touch();
+    }
+
     /** Nhập thêm hàng vào kho. */
     public void restock(int quantity) {
         requirePositive(quantity);

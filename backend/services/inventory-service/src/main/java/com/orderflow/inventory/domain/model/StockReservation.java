@@ -82,6 +82,22 @@ public class StockReservation {
         touch();
     }
 
+    /**
+     * Đơn được chốt SAU KHI phiếu đã hết hạn — cuộc đua giữa job hết hạn và
+     * {@code order.confirmed}. Hàng đã được lấy lại từ kho (xem
+     * {@link Stock#confirmFromAvailable(int)}) nên phiếu chuyển sang CONFIRMED
+     * như bình thường. Chỉ đi được từ EXPIRED — RELEASED nghĩa là saga đã huỷ
+     * đơn, không có chuyện chốt lại.
+     */
+    public void confirmAfterExpiry() {
+        if (status != ReservationStatus.EXPIRED) {
+            throw new IllegalStateException(
+                    "Cannot confirm-after-expiry reservation %s: status is %s".formatted(id, status));
+        }
+        this.status = ReservationStatus.CONFIRMED;
+        touch();
+    }
+
     public boolean isExpired(Instant now) {
         return status.isActive() && now.isAfter(expiresAt);
     }

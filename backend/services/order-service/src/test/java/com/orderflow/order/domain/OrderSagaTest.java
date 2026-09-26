@@ -74,6 +74,30 @@ class OrderSagaTest {
     }
 
     @Test
+    @DisplayName("Saga timeout → COMPENSATING (hàng vẫn đang giữ, phải nhả), rồi → COMPENSATED")
+    void paymentTimeoutCompensates() {
+        saga.stockReserved();
+        saga.paymentTimedOut();
+
+        assertThat(saga.status()).isEqualTo(SagaStatus.COMPENSATING);
+        assertThat(saga.currentStep()).isEqualTo(Step.RELEASE_STOCK);
+        assertThat(saga.failureReason()).isEqualTo("PAYMENT_TIMEOUT");
+
+        saga.stockReleased();
+        assertThat(saga.status()).isEqualTo(SagaStatus.COMPENSATED);
+    }
+
+    @Test
+    @DisplayName("Saga timeout chỉ áp dụng khi đang chờ tiền — tiền về rồi thì không huỷ được nữa")
+    void paymentTimeoutOnlyWhileAwaitingPayment() {
+        assertThatThrownBy(saga::paymentTimedOut).as("STARTED").isInstanceOf(IllegalStateException.class);
+
+        saga.stockReserved();
+        saga.paymentCompleted();
+        assertThatThrownBy(saga::paymentTimedOut).as("COMPLETED").isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
     @DisplayName("Nhật ký ghi đủ từng bước theo đúng thứ tự — dữ liệu cho saga timeline")
     void logRecordsEveryStepInOrder() {
         saga.stockReserved();

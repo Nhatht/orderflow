@@ -22,8 +22,8 @@ public class ReservationExpiryJob {
     private final ExpireReservationsUseCase expireReservations;
 
     /**
-     * 30 giây một lần: phiếu sống 3 phút nên nhả trễ tối đa 30 giây là chấp
-     * nhận được. Quét dày hơn chỉ tăng tải database mà không đổi gì đáng kể.
+     * 30 giây một lần: nhả trễ tối đa 30 giây so với hạn 30 phút là không đáng
+     * kể. Quét dày hơn chỉ tăng tải database mà không đổi gì.
      */
     @Scheduled(fixedDelayString = "${orderflow.inventory.expiry.interval:PT30S}")
     public void run() {

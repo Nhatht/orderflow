@@ -71,7 +71,7 @@ public class ReserveStockService implements ReserveStockUseCase {
                                ReservationRepositoryPort reservationRepository,
                                DistributedLockPort lock,
                                TransactionTemplate tx,
-                               @Value("${orderflow.inventory.reservation-ttl:PT3M}") Duration reservationTtl,
+                               @Value("${orderflow.inventory.reservation-ttl:PT30M}") Duration reservationTtl,
                                @Value("${orderflow.inventory.lock.wait-time:PT5S}") Duration lockWaitTime,
                                @Value("${orderflow.inventory.lock.lease-time:PT10S}") Duration lockLeaseTime) {
         this.stockRepository = stockRepository;

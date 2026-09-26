@@ -11,6 +11,9 @@ import org.slf4j.MDC;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
+import java.util.EnumSet;
+import java.util.Set;
+
 /**
  * Driving adapter: kết cục của saga → chốt hoặc nhả hàng đang giữ.
  */
@@ -18,6 +21,16 @@ import org.springframework.stereotype.Component;
 @Component
 @RequiredArgsConstructor
 public class OrderOutcomeListener {
+
+    /**
+     * Những lý do huỷ mà saga đang ở COMPENSATING và CHỜ {@code stock.released}.
+     * Thiếu một lý do ở đây là saga của lý do đó treo mãi — thêm lý do huỷ mới
+     * vào contract thì PHẢI xem lại tập này. Hai lý do còn lại không chờ:
+     * STOCK_UNAVAILABLE (chưa giữ gì) và RESERVATION_EXPIRED (saga FAILED ngay).
+     */
+    private static final Set<OrderCancelledEvent.Reason> SAGA_AWAITS_RELEASE = EnumSet.of(
+            OrderCancelledEvent.Reason.PAYMENT_DECLINED,
+            OrderCancelledEvent.Reason.PAYMENT_TIMEOUT);
 
     private final SettleOrderStockUseCase settleOrderStock;
 
@@ -39,8 +52,7 @@ public class OrderOutcomeListener {
         try {
             log.info("Received {} eventId={} order={} reason={}", envelope.eventType(), envelope.eventId(),
                     envelope.payload().orderId(), envelope.payload().reason());
-            // Chỉ huỷ vì thanh toán thì saga mới đang chờ xác nhận đền bù.
-            boolean sagaAwaitsAck = envelope.payload().reason() == OrderCancelledEvent.Reason.PAYMENT_DECLINED;
+            boolean sagaAwaitsAck = SAGA_AWAITS_RELEASE.contains(envelope.payload().reason());
             settleOrderStock.releaseForOrder(envelope.eventId(), envelope.correlationId(),
                     envelope.payload().orderId(), sagaAwaitsAck);
         } finally {

@@ -160,5 +160,46 @@ class StockTest {
             assertThat(r.status().isFinal()).isTrue();
             assertThat(r.status().isActive()).isFalse();
         }
+
+        @Test
+        @DisplayName("chốt sau khi hết hạn: chỉ đi được từ EXPIRED, không từ RELEASED")
+        void confirmAfterExpiryOnlyFromExpired() {
+            var expired = StockReservation.hold(UUID.randomUUID(), PRODUCT, 1, Duration.ofMinutes(3));
+            expired.expire();
+            expired.confirmAfterExpiry();
+            assertThat(expired.status()).isEqualTo(ReservationStatus.CONFIRMED);
+
+            // RELEASED = saga đã huỷ đơn. Không có chuyện hồi sinh.
+            var released = StockReservation.hold(UUID.randomUUID(), PRODUCT, 1, Duration.ofMinutes(3));
+            released.release();
+            assertThatThrownBy(released::confirmAfterExpiry).isInstanceOf(IllegalStateException.class);
+        }
+    }
+
+    @Nested
+    @DisplayName("Chốt đơn khi phiếu đã hết hạn (phương án D)")
+    class ConfirmingAfterExpiry {
+
+        @Test
+        @DisplayName("còn hàng: lấy lại từ available, tổng tồn giảm")
+        void takesBackFromAvailable() {
+            Stock stock = stockOf(10, 0);   // hàng đã được job trả về kho
+            stock.confirmFromAvailable(4);
+
+            assertThat(stock.availableQty()).isEqualTo(6);
+            assertThat(stock.reservedQty()).isZero();
+            assertThat(stock.totalQty()).isEqualTo(6);
+        }
+
+        @Test
+        @DisplayName("hết hàng (đã bán cho người khác): ném InsufficientStockException, không đổi gì")
+        void oversoldIsRejected() {
+            Stock stock = stockOf(0, 1);   // món duy nhất đã được người khác giữ
+
+            assertThatThrownBy(() -> stock.confirmFromAvailable(1))
+                    .isInstanceOf(InsufficientStockException.class);
+            assertThat(stock.availableQty()).isZero();
+            assertThat(stock.reservedQty()).as("không đụng tới hàng người khác đang giữ").isEqualTo(1);
+        }
     }
 }
