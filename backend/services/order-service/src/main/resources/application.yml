@@ -132,3 +132,33 @@ logging:
     com.orderflow: DEBUG
     org.hibernate.SQL: INFO
 
+---
+# =============================================================================
+# Distributed tracing (pattern 7, tuần 8) — Micrometer Tracing → OpenTelemetry
+# → OTLP/HTTP → Jaeger (http://localhost:16686). Tài liệu YAML riêng (sau ---)
+# để không trùng khoá management/logging ở trên; Spring Boot gộp hai tài liệu.
+#
+# Test (@SpringBootTest) mặc định TẮT tracing — không có Jaeger vẫn chạy được.
+# =============================================================================
+spring:
+  kafka:
+    # Span cho mỗi lần gửi/nhận Kafka + header W3C "traceparent" trên message,
+    # nhờ vậy trace đi XUYÊN qua Kafka sang service khác.
+    template:
+      observation-enabled: true
+    listener:
+      observation-enabled: true
+
+management:
+  tracing:
+    sampling:
+      probability: 1.0   # dev lấy mẫu 100%; production hạ xuống (vd. 0.1)
+  otlp:
+    tracing:
+      endpoint: ${OTLP_TRACING_ENDPOINT:http://localhost:4318/v1/traces}
+
+logging:
+  pattern:
+    # Mỗi dòng log mang [service,traceId,spanId,correlationId] — copy traceId
+    # từ log dán vào Jaeger là thấy cả đường đi của request.
+    correlation: "[${spring.application.name:},%X{traceId:-},%X{spanId:-},%X{correlationId:-}] "

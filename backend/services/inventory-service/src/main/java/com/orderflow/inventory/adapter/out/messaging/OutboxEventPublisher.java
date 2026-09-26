@@ -38,6 +38,7 @@ public class OutboxEventPublisher implements EventPublisherPort {
 
     private final JdbcTemplate jdbc;
     private final ObjectMapper objectMapper;
+    private final OutboxTracing tracing;
 
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
@@ -126,10 +127,10 @@ public class OutboxEventPublisher implements EventPublisherPort {
         }
 
         jdbc.update("""
-                INSERT INTO outbox (id, aggregate_type, aggregate_id, event_type, topic, payload)
-                VALUES (?, ?, ?, ?, ?, ?::jsonb)
+                INSERT INTO outbox (id, aggregate_type, aggregate_id, event_type, topic, payload, trace_parent)
+                VALUES (?, ?, ?, ?, ?, ?::jsonb, ?)
                 """,
                 envelope.eventId(), aggregateType, envelope.aggregateId(),
-                envelope.eventType(), topic, json);
+                envelope.eventType(), topic, json, tracing.currentTraceParent());
     }
 }

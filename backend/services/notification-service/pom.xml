@@ -36,6 +36,17 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
+
+        <!-- Distributed tracing (pattern 7): Micrometer Tracing → OpenTelemetry → OTLP → Jaeger.
+             Version do Spring Boot quản lý (micrometer-tracing 1.3, OpenTelemetry 1.37). -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+        </dependency>
         <!--
             Không có starter-web (service này không phục vụ HTTP nghiệp vụ), nên
             phải kéo Jackson vào tường minh: thiếu nó thì không có bean ObjectMapper

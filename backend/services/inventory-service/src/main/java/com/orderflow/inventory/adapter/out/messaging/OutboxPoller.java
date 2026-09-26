@@ -73,22 +73,25 @@ public class OutboxPoller {
     private final int batchSize;
     private final Duration sendTimeout;
     private final Duration retention;
+    private final OutboxTracing tracing;
 
     public OutboxPoller(JdbcTemplate jdbc,
                         KafkaTemplate<String, String> kafkaTemplate,
                         TransactionTemplate tx,
                         @Value("${orderflow.outbox.batch-size:100}") int batchSize,
                         @Value("${orderflow.outbox.send-timeout:PT15S}") Duration sendTimeout,
-                        @Value("${orderflow.outbox.retention:P7D}") Duration retention) {
+                        @Value("${orderflow.outbox.retention:P7D}") Duration retention,
+                        OutboxTracing tracing) {
         this.jdbc = jdbc;
         this.kafkaTemplate = kafkaTemplate;
         this.tx = tx;
         this.batchSize = batchSize;
         this.sendTimeout = sendTimeout;
         this.retention = retention;
+        this.tracing = tracing;
     }
 
-    private record OutboxRow(UUID id, String topic, String key, String payload) {}
+    private record OutboxRow(UUID id, String topic, String key, String payload, String traceParent) {}
 
     /**
      * {@code fixedDelay}, không phải {@code fixedRate}: vòng sau bắt đầu 500ms
@@ -118,7 +121,7 @@ public class OutboxPoller {
     public int relayBatch() {
         Integer relayed = tx.execute(status -> {
             List<OutboxRow> rows = jdbc.query("""
-                    SELECT id, topic, aggregate_id, payload::text AS payload
+                    SELECT id, topic, aggregate_id, payload::text AS payload, trace_parent
                     FROM outbox
                     WHERE published_at IS NULL
                     ORDER BY seq
@@ -129,7 +132,8 @@ public class OutboxPoller {
                             rs.getObject("id", UUID.class),
                             rs.getString("topic"),
                             rs.getString("aggregate_id"),
-                            rs.getString("payload")),
+                            rs.getString("payload"),
+                            rs.getString("trace_parent")),
                     batchSize);
 
             if (rows.isEmpty()) {
@@ -139,7 +143,9 @@ public class OutboxPoller {
             // Gửi cả lô rồi chờ một lần — nhanh hơn nhiều so với gửi-chờ từng
             // cái. Thứ tự trong cùng partition vẫn giữ nhờ idempotent producer.
             List<CompletableFuture<SendResult<String, String>>> sends = rows.stream()
-                    .map(r -> kafkaTemplate.send(r.topic(), r.key(), r.payload()))
+                    // Gửi trong span con của trace GỐC (lưu lúc ghi outbox) — xem OutboxTracing.
+                    .map(r -> tracing.inStoredTrace(r.traceParent(), "outbox relay " + r.topic(),
+                            () -> kafkaTemplate.send(tracing.record(r.topic(), r.key(), r.payload(), r.traceParent()))))
                     .toList();
             try {
                 CompletableFuture.allOf(sends.toArray(CompletableFuture[]::new))
