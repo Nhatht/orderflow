@@ -9,6 +9,8 @@ import com.orderflow.contracts.payment.PaymentFailedEvent;
 import com.orderflow.contracts.payment.PaymentRequestedEvent;
 import com.orderflow.payment.adapter.out.gateway.SimulatedPaymentGateway;
 import com.orderflow.payment.application.dto.ProcessPaymentCommand;
+import com.orderflow.contracts.order.OrderCancelledEvent;
+import com.orderflow.payment.application.port.in.CancelOrderPaymentUseCase;
 import com.orderflow.payment.application.port.in.ProcessPaymentUseCase;
 import com.orderflow.payment.application.port.out.PaymentRepositoryPort;
 import com.orderflow.payment.domain.model.Payment;
@@ -24,6 +26,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -62,6 +67,7 @@ import static org.assertj.core.api.Assertions.fail;
  * "đồng thời" — những thứ không tái hiện được một cách chắc chắn qua Kafka.
  */
 @SpringBootTest
+@ExtendWith(OutputCaptureExtension.class)
 class ProcessPaymentIT {
 
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine")
@@ -75,7 +81,9 @@ class ProcessPaymentIT {
         // payment.requested thuộc order-service; ở đây không có order-service nên test tạo thay.
         try (var admin = AdminClient.create(Map.of(
                 AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers()))) {
-            admin.createTopics(List.of(new NewTopic(Topics.PAYMENT_REQUESTED, 3, (short) 1))).all().get();
+            admin.createTopics(List.of(
+                    new NewTopic(Topics.PAYMENT_REQUESTED, 3, (short) 1),
+                    new NewTopic(Topics.ORDER_CANCELLED, 3, (short) 1))).all().get();
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
@@ -92,6 +100,7 @@ class ProcessPaymentIT {
     @Autowired KafkaTemplate<String, String> kafkaTemplate;
     @Autowired ObjectMapper objectMapper;
     @Autowired ProcessPaymentUseCase processPayment;
+    @Autowired CancelOrderPaymentUseCase cancelOrderPayment;
     @Autowired PaymentRepositoryPort payments;
     @Autowired SimulatedPaymentGateway gateway;
     @Autowired JdbcTemplate jdbc;
@@ -260,7 +269,138 @@ class ProcessPaymentIT {
         assertThat(optimisticLosers).isBetween(0, 4);
     }
 
+    // =========================================================================
+    // Đơn đã huỷ không bao giờ bị thu tiền (review 25/09)
+    // =========================================================================
+
+    @Test
+    @DisplayName("order.cancelled tới TRƯỚC payment.requested (payment tụt lại) → không gọi cổng, không phát event")
+    void cancellationBeforeRequestNeverCharges() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        sendCancelled(orderId, OrderCancelledEvent.Reason.PAYMENT_TIMEOUT);
+        awaitCancelledRecorded(orderId);
+
+        send(request(orderId, "45000"));   // lệnh thu tiền cũ, giờ mới tới
+
+        Payment payment = awaitPaymentStatus(orderId, PaymentStatus.FAILED);
+        assertThat(payment.failureReason()).isEqualTo("ORDER_CANCELLED");
+        assertThat(gateway.timesProcessed(payment.id())).as("cổng thanh toán KHÔNG bị gọi").isZero();
+        assertThat(outboxRows(orderId)).as("saga đã huỷ đơn — không phát kết quả nào").isZero();
+    }
+
+    @Test
+    @DisplayName("Lần thử lại sau khi app chết giữa chừng (payment PENDING) gặp bia mộ → không gọi cổng")
+    void pendingPaymentOfCancelledOrderIsAbandonedOnRetry() {
+        UUID orderId = UUID.randomUUID();
+        // Dựng lại: TX1 đã commit PENDING rồi app chết, trước khi gọi cổng.
+        Payment pending = payments.save(Payment.initiate(orderId, UUID.randomUUID(), new BigDecimal("45000"), "VND"));
+        cancelOrderPayment.onOrderCancelled(orderId, "PAYMENT_TIMEOUT");
+
+        Payment result = processPayment.process(new ProcessPaymentCommand(
+                "c", orderId, pending.customerId(), new BigDecimal("45000"), "VND"));
+
+        assertThat(result.status()).isEqualTo(PaymentStatus.FAILED);
+        assertThat(result.id()).as("cùng payment, không tạo cái mới").isEqualTo(pending.id());
+        assertThat(gateway.timesProcessed(pending.id())).isZero();
+    }
+
+    @Test
+    @DisplayName("Huỷ SAU khi đã thu tiền → payment giữ nguyên COMPLETED (cần hoàn tiền — chỉ log), huỷ trùng không lỗi")
+    void cancellationAfterCompletedLeavesPayment() {
+        UUID orderId = UUID.randomUUID();
+        Payment paid = processPayment.process(new ProcessPaymentCommand(
+                "c", orderId, UUID.randomUUID(), new BigDecimal("45000"), "VND"));
+        assertThat(paid.status()).isEqualTo(PaymentStatus.COMPLETED);
+
+        cancelOrderPayment.onOrderCancelled(orderId, "PAYMENT_TIMEOUT");
+        cancelOrderPayment.onOrderCancelled(orderId, "PAYMENT_TIMEOUT");   // giao trùng
+
+        assertThat(payments.findByOrderId(orderId).orElseThrow().status()).isEqualTo(PaymentStatus.COMPLETED);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM cancelled_orders WHERE order_id = ?", Integer.class, orderId))
+                .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Huỷ tới ĐÚNG lúc đang gọi cổng → tiền bị trừ, nhưng payment PHẢI log REFUND REQUIRED (review tuần 8)")
+    void cancellationDuringGatewayCallIsReportedForRefund(CapturedOutput output) throws Exception {
+        UUID orderId = UUID.randomUUID();
+        Future<Payment> inFlight = chargeInBackground(orderId);
+        awaitGatewayCallInFlight(orderId);
+
+        cancelOrderPayment.onOrderCancelled(orderId, "PAYMENT_TIMEOUT");
+
+        assertThat(inFlight.get(10, TimeUnit.SECONDS).status()).isEqualTo(PaymentStatus.COMPLETED);
+        assertThat(output).contains("CHARGED order=" + orderId).contains("REFUND REQUIRED");
+    }
+
+    @Test
+    @DisplayName("Lần giao song song ghi FAILED trong lúc lần này đang gọi cổng → tiền bị trừ thì KHÔNG được im lặng")
+    void chargeRecordedAsFailedIsReportedForRefund(CapturedOutput output) throws Exception {
+        UUID orderId = UUID.randomUUID();
+        Future<Payment> inFlight = chargeInBackground(orderId);
+        awaitGatewayCallInFlight(orderId);
+
+        // Giả lập lần giao B: thấy bia mộ và abandon() → FAILED/ORDER_CANCELLED.
+        jdbc.update("""
+                UPDATE payments SET status = 'FAILED', failure_reason = 'ORDER_CANCELLED', version = version + 1
+                WHERE order_id = ?""", orderId);
+
+        Payment recorded = inFlight.get(10, TimeUnit.SECONDS);
+        assertThat(recorded.status()).as("không sửa được trạng thái cuối").isEqualTo(PaymentStatus.FAILED);
+        assertThat(output).contains("CHARGED but payment").contains("order=" + orderId).contains("REFUND REQUIRED");
+    }
+
     // ---- helper ------------------------------------------------------------
+
+    private final ExecutorService background = Executors.newSingleThreadExecutor();
+
+    private Future<Payment> chargeInBackground(UUID orderId) {
+        return background.submit(() -> processPayment.process(new ProcessPaymentCommand(
+                "c", orderId, UUID.randomUUID(), new BigDecimal("45000"), "VND")));
+    }
+
+    /**
+     * Chờ payment PENDING xuất hiện (TX1 đã commit), rồi thêm một nhịp để chắc
+     * lần kiểm bia mộ ngay sau TX1 đã qua — lúc này lời gọi cổng (trễ giả lập
+     * 200ms) đang bay.
+     */
+    private void awaitGatewayCallInFlight(UUID orderId) throws InterruptedException {
+        Instant deadline = Instant.now().plusSeconds(10);
+        while (payments.findByOrderId(orderId).isEmpty() && Instant.now().isBefore(deadline)) {
+            Thread.sleep(5);
+        }
+        assertThat(payments.findByOrderId(orderId)).isPresent();
+        Thread.sleep(50);
+    }
+
+    private void sendCancelled(UUID orderId, OrderCancelledEvent.Reason reason) throws Exception {
+        var envelope = EventEnvelope.of(OrderCancelledEvent.TYPE, orderId.toString(), "c",
+                new OrderCancelledEvent(orderId, UUID.randomUUID(), reason));
+        kafkaTemplate.send(Topics.ORDER_CANCELLED, orderId.toString(), objectMapper.writeValueAsString(envelope)).get();
+    }
+
+    private void awaitCancelledRecorded(UUID orderId) throws InterruptedException {
+        Instant deadline = Instant.now().plusSeconds(30);
+        while (Instant.now().isBefore(deadline)) {
+            if (jdbc.queryForObject("SELECT count(*) FROM cancelled_orders WHERE order_id = ?", Integer.class, orderId) == 1) {
+                return;
+            }
+            Thread.sleep(200);
+        }
+        fail("order %s was never recorded as cancelled", orderId);
+    }
+
+    private Payment awaitPaymentStatus(UUID orderId, PaymentStatus status) throws InterruptedException {
+        Instant deadline = Instant.now().plusSeconds(30);
+        while (Instant.now().isBefore(deadline)) {
+            var payment = payments.findByOrderId(orderId);
+            if (payment.isPresent() && payment.get().status() == status) {
+                return payment.get();
+            }
+            Thread.sleep(200);
+        }
+        return fail("payment of order %s never reached %s", orderId, status);
+    }
 
     private static EventEnvelope<PaymentRequestedEvent> request(UUID orderId, String amount) {
         var payload = new PaymentRequestedEvent(orderId, UUID.randomUUID(), new BigDecimal(amount), "VND");

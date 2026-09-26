@@ -2,11 +2,13 @@ package com.orderflow.payment.application.service;
 
 import com.orderflow.payment.application.dto.ProcessPaymentCommand;
 import com.orderflow.payment.application.port.in.ProcessPaymentUseCase;
+import com.orderflow.payment.application.port.out.CancelledOrderPort;
 import com.orderflow.payment.application.port.out.EventPublisherPort;
 import com.orderflow.payment.application.port.out.PaymentGatewayPort;
 import com.orderflow.payment.application.port.out.PaymentGatewayPort.Result;
 import com.orderflow.payment.application.port.out.PaymentRepositoryPort;
 import com.orderflow.payment.domain.model.Payment;
+import com.orderflow.payment.domain.model.PaymentStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -58,6 +60,7 @@ public class ProcessPaymentService implements ProcessPaymentUseCase {
     private final PaymentRepositoryPort paymentRepository;
     private final PaymentGatewayPort gateway;
     private final EventPublisherPort eventPublisher;
+    private final CancelledOrderPort cancelledOrders;
     private final TransactionTemplate tx;
 
     @Override
@@ -71,6 +74,17 @@ public class ProcessPaymentService implements ProcessPaymentUseCase {
             return payment;
         }
 
+        // Saga đã huỷ đơn (vd. saga timeout khi payment tụt lại) → KHÔNG gọi cổng.
+        // Kiểm ngay trước khi gọi, sau TX1: cũng bắt được trường hợp app chết
+        // sau TX1 rồi lệnh huỷ tới trong lúc app tắt.
+        if (cancelledOrders.isCancelled(payment.orderId())) {
+            return tx.execute(status -> abandon(payment));
+        }
+
+        // Khe hở còn lại: lệnh huỷ tới ĐÚNG lúc lời gọi cổng đang bay (vài trăm
+        // ms, hoặc 30–90 giây với OTP thật). Tiền vẫn bị trừ → saga log LATE
+        // PAYMENT, và recordResult (TX2) kiểm lại bia mộ rồi log REFUND REQUIRED.
+        // Bịt hẳn cần authorize/capture — xem docs/SAGA-TIMEOUT.md, phương án E.
         Result result = gateway.charge(payment.id(), payment.amount(), payment.currency());   // ngoài TX
 
         return tx.execute(status -> recordResult(payment, result, command.correlationId())); // TX2
@@ -90,10 +104,39 @@ public class ProcessPaymentService implements ProcessPaymentUseCase {
         }
     }
 
+    /**
+     * Bỏ thanh toán của đơn đã huỷ: FAILED với lý do ORDER_CANCELLED, và KHÔNG
+     * phát event — saga đã huỷ đơn từ trước, một {@code payment.failed} lúc này
+     * chỉ bị saga coi là phản hồi cũ. Dòng FAILED ở lại làm dấu vết đối soát.
+     */
+    private Payment abandon(Payment initiated) {
+        Payment payment = paymentRepository.findByOrderId(initiated.orderId()).orElseThrow();
+        if (payment.status().isFinal()) {
+            return payment;
+        }
+        payment.fail(ORDER_CANCELLED);
+        log.info("Payment for order={} abandoned: order was cancelled before the gateway was called",
+                payment.orderId());
+        return paymentRepository.save(payment);
+    }
+
+    static final String ORDER_CANCELLED = "ORDER_CANCELLED";
+
     private Payment recordResult(Payment initiated, Result result, String correlationId) {
         // Đọc lại: trong lúc ta chờ cổng, một lần giao khác có thể đã ghi xong.
         Payment payment = paymentRepository.findByOrderId(initiated.orderId()).orElseThrow();
         if (payment.status().isFinal()) {
+            // Review tuần 8: hai lần giao song song (Kafka rebalance) — lần kia thấy
+            // bia mộ và ghi FAILED/ORDER_CANCELLED trong lúc lần NÀY đang gọi cổng.
+            // Cổng đã trừ tiền nhưng sổ nói FAILED. Không sửa được bản ghi (FAILED
+            // là trạng thái cuối), nhưng tuyệt đối không được IM LẶNG: tiền mất mà
+            // không ai biết là sai lệch đối soát.
+            if (result instanceof Result.Approved approved && payment.status() != PaymentStatus.COMPLETED) {
+                log.error("CHARGED but payment {} of order={} is recorded as {} ({}) — gatewayReference={} "
+                                + "amount={} {} — REFUND REQUIRED",
+                        payment.id(), payment.orderId(), payment.status(), payment.failureReason(),
+                        approved.gatewayReference(), payment.amount().toPlainString(), payment.currency());
+            }
             return payment;
         }
 
@@ -111,6 +154,16 @@ public class ProcessPaymentService implements ProcessPaymentUseCase {
 
         log.info("Payment {} for order={} amount={} {}", saved.status(), saved.orderId(),
                 saved.amount().toPlainString(), saved.currency());
+
+        // Review tuần 8: lệnh huỷ tới ĐÚNG lúc lời gọi cổng đang bay. Lúc đó
+        // CancelOrderPaymentService chỉ thấy PENDING nên chỉ log cảnh báo — phải
+        // kiểm lại ở đây, SAU khi biết cổng đã trừ tiền.
+        if (saved.status() == PaymentStatus.COMPLETED && cancelledOrders.isCancelled(saved.orderId())) {
+            log.error("CHARGED order={} that was cancelled while the gateway call was in flight — "
+                            + "payment {} gatewayReference={} amount={} {} — REFUND REQUIRED",
+                    saved.orderId(), saved.id(), saved.gatewayReference(),
+                    saved.amount().toPlainString(), saved.currency());
+        }
         return saved;
     }
 }

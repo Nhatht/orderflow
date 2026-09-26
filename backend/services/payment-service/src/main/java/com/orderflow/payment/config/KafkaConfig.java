@@ -3,6 +3,7 @@ package com.orderflow.payment.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.orderflow.contracts.Topics;
 import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.common.TopicPartition;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.TopicBuilder;
@@ -50,16 +51,28 @@ public class KafkaConfig {
         backOff.setInitialInterval(1_000);
         backOff.setMultiplier(2.0);
         backOff.setMaxInterval(30_000);
-        var handler = new DefaultErrorHandler(new DeadLetterPublishingRecoverer(kafkaTemplate), backOff);
+        var recoverer = new DeadLetterPublishingRecoverer(kafkaTemplate,
+                (record, ex) -> new TopicPartition(deadLetterTopicOf(record.topic()), record.partition()));
+        var handler = new DefaultErrorHandler(recoverer, backOff);
         handler.addNotRetryableExceptions(IllegalArgumentException.class);
         return handler;
+    }
+
+    /**
+     * {@code payment.requested} chỉ payment nghe → {@code payment.requested.DLT}.
+     * {@code order.cancelled} thì inventory và notification cũng nghe → DLT RIÊNG
+     * {@code order.cancelled.payment.DLT}, không thì không biết message hỏng là của
+     * ai (cùng lý do với notification). Tên DLT theo group nghe, không theo topic.
+     */
+    static String deadLetterTopicOf(String topic) {
+        return Topics.ORDER_CANCELLED.equals(topic) ? topic + ".payment.DLT" : topic + ".DLT";
     }
 
     /** DLT của các topic service này NGHE — bên nghe sở hữu DLT của mình. */
     @Bean
     public KafkaAdmin.NewTopics deadLetterTopics() {
-        return new KafkaAdmin.NewTopics(Stream.of(Topics.PAYMENT_REQUESTED)
-                .map(t -> TopicBuilder.name(t + ".DLT").partitions(3).replicas(1).build())
+        return new KafkaAdmin.NewTopics(Stream.of(Topics.PAYMENT_REQUESTED, Topics.ORDER_CANCELLED)
+                .map(t -> TopicBuilder.name(deadLetterTopicOf(t)).partitions(3).replicas(1).build())
                 .toArray(NewTopic[]::new));
     }
 }
