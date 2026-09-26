@@ -2,6 +2,7 @@ package com.orderflow.inventory.application.port.out;
 
 import com.orderflow.inventory.application.dto.ReservationOutcome;
 import com.orderflow.inventory.application.dto.ReservationView;
+import com.orderflow.inventory.domain.model.Stock;
 
 import java.util.List;
 import java.util.UUID;
@@ -29,4 +30,10 @@ public interface EventPublisherPort {
      * vào — job tự kích hoạt, không đáp lại event nào — nên cài đặt tự sinh.
      */
     void publishStockReservationExpired(UUID orderId, List<ReservationView> expired);
+
+    /**
+     * Tồn kho của một sản phẩm vừa đổi — để xoá cache (pattern 6). PHẢI gọi
+     * trong transaction ghi tồn kho, để cache không bao giờ bị bỏ quên.
+     */
+    void publishStockChanged(Stock stock);
 }

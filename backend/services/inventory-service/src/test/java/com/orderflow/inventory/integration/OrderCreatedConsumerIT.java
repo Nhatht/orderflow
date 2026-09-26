@@ -253,7 +253,7 @@ class OrderCreatedConsumerIT extends AbstractInventoryIT {
     }
 
     private void assertStock(UUID productId, int available, int reserved) {
-        StockView stock = getStock.getByProductId(productId);
+        StockView stock = stockInDb(productId);
         assertThat(stock.availableQty()).as("available of %s", productId).isEqualTo(available);
         assertThat(stock.reservedQty()).as("reserved of %s", productId).isEqualTo(reserved);
     }

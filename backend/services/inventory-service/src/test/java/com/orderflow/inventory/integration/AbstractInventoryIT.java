@@ -1,6 +1,8 @@
 package com.orderflow.inventory.integration;
 
 import com.orderflow.contracts.Topics;
+import com.orderflow.inventory.application.dto.StockView;
+import com.orderflow.inventory.application.port.out.StockRepositoryPort;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.admin.NewTopic;
@@ -90,6 +92,19 @@ public abstract class AbstractInventoryIT {
 
     @Autowired
     protected JdbcTemplate jdbc;
+
+    @Autowired
+    protected StockRepositoryPort stockRepository;
+
+    /**
+     * Đọc tồn kho THẲNG từ database, bỏ qua cache. Test kiểm SỰ THẬT sau khi
+     * giữ/nhả/chốt; còn {@code GetStockQuery} giờ đi qua cache (pattern 6) và
+     * có thể trả số cũ vài trăm ms trước khi event xoá cache tới — dùng nó để
+     * kiểm tồn kho sẽ làm test chập chờn. Cache có test riêng: {@code StockCacheIT}.
+     */
+    protected StockView stockInDb(UUID productId) {
+        return stockRepository.findByProductId(productId).map(StockView::from).orElseThrow();
+    }
 
     /** Tạo một sản phẩm mới với tồn kho cho trước, riêng cho từng test. */
     protected UUID givenProductWithStock(int quantity) {

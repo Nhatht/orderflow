@@ -89,7 +89,7 @@ class ConcurrentReservationIT extends AbstractInventoryIT {
                     .isTrue();
         }
 
-        var stock = getStock.getByProductId(scarceProduct);
+        var stock = stockInDb(scarceProduct);
 
         assertThat(successes.get())
                 .as("CHỈ một luồng được giữ hàng")
@@ -130,7 +130,7 @@ class ConcurrentReservationIT extends AbstractInventoryIT {
         assertThat(second.id()).isEqualTo(first.id());
         assertThat(third.id()).isEqualTo(first.id());
 
-        var stock = getStock.getByProductId(product);
+        var stock = stockInDb(product);
         assertThat(stock.availableQty())
                 .as("chỉ trừ MỘT lần dù gọi ba lần")
                 .isEqualTo(95);
@@ -144,13 +144,13 @@ class ConcurrentReservationIT extends AbstractInventoryIT {
         UUID orderId = UUID.randomUUID();
 
         reserveStock.reserve(new ReserveStockCommand(orderId, product, 4));
-        assertThat(getStock.getByProductId(product).availableQty()).isEqualTo(46);
+        assertThat(stockInDb(product).availableQty()).isEqualTo(46);
 
         reserveStock.release(orderId, product);
         reserveStock.release(orderId, product);   // saga retry sau khi restart
         reserveStock.release(orderId, product);
 
-        var stock = getStock.getByProductId(product);
+        var stock = stockInDb(product);
         assertThat(stock.availableQty())
                 .as("chỉ nhả MỘT lần dù gọi ba lần")
                 .isEqualTo(50);
@@ -167,7 +167,7 @@ class ConcurrentReservationIT extends AbstractInventoryIT {
         reserveStock.confirm(orderId, product);
         reserveStock.confirm(orderId, product);   // idempotent
 
-        var stock = getStock.getByProductId(product);
+        var stock = stockInDb(product);
         assertThat(stock.availableQty()).isEqualTo(17);
         assertThat(stock.reservedQty()).isZero();
         assertThat(stock.totalQty())

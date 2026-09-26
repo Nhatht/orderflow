@@ -2,6 +2,7 @@ package com.orderflow.inventory.adapter.out.persistence;
 
 import com.orderflow.inventory.adapter.out.persistence.mapper.InventoryMapper;
 import com.orderflow.inventory.adapter.out.persistence.repository.StockJpaRepository;
+import com.orderflow.inventory.application.port.out.EventPublisherPort;
 import com.orderflow.inventory.application.port.out.StockRepositoryPort;
 import com.orderflow.inventory.domain.model.Stock;
 import lombok.RequiredArgsConstructor;
@@ -11,12 +12,26 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+/**
+ * Lưu tồn kho — và mỗi lần lưu là một event {@code stock.changed} vào outbox.
+ *
+ * <p><b>Vì sao phát event ở TẦNG LƯU chứ không ở từng use case:</b> tồn kho được
+ * ghi ở 6 chỗ trong 4 service (giữ đơn, giữ lẻ, nhả, chốt, hết hạn, lấy lại sau
+ * hết hạn). Bắt từng chỗ nhớ phát event thì chỗ thứ 7 thêm sau này sẽ quên, và
+ * cache của sản phẩm đó cũ tới hết TTL mà không ai biết. Gắn vào tầng lưu thì
+ * KHÔNG CÓ CÁCH nào đổi tồn kho mà không phát — cùng ý tưởng với Change Data
+ * Capture (Debezium đọc WAL của Postgres), nhưng rẻ hơn nhiều.
+ *
+ * <p>Cái giá: event phát cả khi lưu mà số lượng không đổi (nhánh OVERSOLD). Vô
+ * hại — xoá cache thừa một lần.
+ */
 @Component
 @RequiredArgsConstructor
 public class StockPersistenceAdapter implements StockRepositoryPort {
 
     private final StockJpaRepository repository;
     private final InventoryMapper mapper;
+    private final EventPublisherPort eventPublisher;
 
     @Override
     public Stock save(Stock stock) {
@@ -27,7 +42,9 @@ public class StockPersistenceAdapter implements StockRepositoryPort {
                 })
                 .orElseGet(() -> mapper.toEntity(stock));
 
-        return mapper.toDomain(repository.save(entity));
+        Stock saved = mapper.toDomain(repository.save(entity));
+        eventPublisher.publishStockChanged(saved);   // MANDATORY: cùng transaction với thay đổi
+        return saved;
     }
 
     @Override

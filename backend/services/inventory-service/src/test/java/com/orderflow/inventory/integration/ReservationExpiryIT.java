@@ -141,7 +141,7 @@ class ReservationExpiryIT extends AbstractInventoryIT {
     }
 
     private void assertStock(UUID product, int available, int reserved) {
-        StockView stock = getStock.getByProductId(product);
+        StockView stock = stockInDb(product);
         assertThat(stock.availableQty()).as("available").isEqualTo(available);
         assertThat(stock.reservedQty()).as("reserved").isEqualTo(reserved);
     }

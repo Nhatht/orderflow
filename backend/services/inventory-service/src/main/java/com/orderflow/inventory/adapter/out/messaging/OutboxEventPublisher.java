@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.orderflow.contracts.EventEnvelope;
 import com.orderflow.contracts.Topics;
+import com.orderflow.contracts.inventory.StockChangedEvent;
 import com.orderflow.contracts.inventory.StockReleasedEvent;
 import com.orderflow.contracts.inventory.StockReservationExpiredEvent;
 import com.orderflow.contracts.inventory.StockReservationFailedEvent;
@@ -11,7 +12,9 @@ import com.orderflow.contracts.inventory.StockReservedEvent;
 import com.orderflow.inventory.application.dto.ReservationOutcome;
 import com.orderflow.inventory.application.dto.ReservationView;
 import com.orderflow.inventory.application.port.out.EventPublisherPort;
+import com.orderflow.inventory.domain.model.Stock;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.MDC;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
@@ -92,10 +95,29 @@ public class OutboxEventPublisher implements EventPublisherPort {
     }
 
     /**
-     * Key = orderId (aggregateId) — mọi event về cùng một đơn, dù do service
-     * nào phát, đều theo key đó và giữ đúng thứ tự trong partition.
+     * Key = productId: mọi thay đổi của một sản phẩm vào cùng partition, xử lý
+     * theo đúng thứ tự. correlationId lấy từ luồng đang chạy nếu có (MDC), không
+     * thì tự sinh — thay đổi tồn kho có thể do job hết hạn, không có request gốc.
      */
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void publishStockChanged(Stock stock) {
+        String correlationId = MDC.get("correlationId");
+        append(Topics.STOCK_CHANGED, "Stock",
+                EventEnvelope.of(StockChangedEvent.TYPE, stock.productId().toString(),
+                        correlationId != null ? correlationId : "stock-" + UUID.randomUUID(),
+                        new StockChangedEvent(stock.productId(), stock.availableQty(), stock.reservedQty())));
+    }
+
     private void append(String topic, EventEnvelope<?> envelope) {
+        append(topic, "Order", envelope);
+    }
+
+    /**
+     * Key = aggregateId. Với event về đơn là orderId — mọi event về cùng một
+     * đơn, dù do service nào phát, đều theo key đó và giữ đúng thứ tự trong partition.
+     */
+    private void append(String topic, String aggregateType, EventEnvelope<?> envelope) {
         String json;
         try {
             json = objectMapper.writeValueAsString(envelope);
@@ -107,7 +129,7 @@ public class OutboxEventPublisher implements EventPublisherPort {
                 INSERT INTO outbox (id, aggregate_type, aggregate_id, event_type, topic, payload)
                 VALUES (?, ?, ?, ?, ?, ?::jsonb)
                 """,
-                envelope.eventId(), "Order", envelope.aggregateId(),
+                envelope.eventId(), aggregateType, envelope.aggregateId(),
                 envelope.eventType(), topic, json);
     }
 }

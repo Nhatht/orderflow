@@ -101,7 +101,7 @@ class OrderOutcomeConsumerIT extends AbstractInventoryIT {
                 EventEnvelope.of(OrderConfirmedEvent.TYPE, orderId.toString(), "c", new OrderConfirmedEvent(orderId, UUID.randomUUID())));
 
         awaitReservationStatus(orderId, "CONFIRMED");
-        StockView stock = getStock.getByProductId(product);
+        StockView stock = stockInDb(product);
         assertThat(stock.availableQty()).isEqualTo(6);
         assertThat(stock.reservedQty()).isZero();
         assertThat(stock.totalQty()).as("lúc DUY NHẤT tổng tồn kho giảm").isEqualTo(6);
@@ -245,7 +245,7 @@ class OrderOutcomeConsumerIT extends AbstractInventoryIT {
     }
 
     private void assertStock(UUID product, int available, int reserved) {
-        StockView stock = getStock.getByProductId(product);
+        StockView stock = stockInDb(product);
         assertThat(stock.availableQty()).as("available").isEqualTo(available);
         assertThat(stock.reservedQty()).as("reserved").isEqualTo(reserved);
     }

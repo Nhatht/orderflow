@@ -48,6 +48,11 @@ public class KafkaConfig {
         return TopicBuilder.name(Topics.STOCK_RESERVATION_EXPIRED).partitions(3).replicas(1).build();
     }
 
+    @Bean
+    public NewTopic stockChangedTopic() {
+        return TopicBuilder.name(Topics.STOCK_CHANGED).partitions(3).replicas(1).build();
+    }
+
     /**
      * Chuyển chuỗi JSON thành kiểu mà tham số {@code @KafkaListener} khai báo.
      *
@@ -96,7 +101,8 @@ public class KafkaConfig {
     /** DLT của các topic service này NGHE — bên nghe sở hữu DLT của mình. */
     @Bean
     public KafkaAdmin.NewTopics deadLetterTopics() {
-        return new KafkaAdmin.NewTopics(Stream.of(Topics.ORDER_CREATED, Topics.ORDER_CONFIRMED, Topics.ORDER_CANCELLED)
+        return new KafkaAdmin.NewTopics(Stream.of(Topics.ORDER_CREATED, Topics.ORDER_CONFIRMED, Topics.ORDER_CANCELLED,
+                        Topics.STOCK_CHANGED)
                 .map(t -> TopicBuilder.name(t + ".DLT").partitions(3).replicas(1).build())
                 .toArray(NewTopic[]::new));
     }

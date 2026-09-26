@@ -42,6 +42,13 @@ public final class Topics {
     /** inventory-service → order-service: phiếu giữ hàng tự hết hạn, hàng đã về kho. */
     public static final String STOCK_RESERVATION_EXPIRED = "stock.reservation-expired";
 
+    /**
+     * inventory-service → bất kỳ ai cache tồn kho: số lượng của một sản phẩm vừa
+     * đổi. Hiện chính inventory nghe để XOÁ cache (cache-aside + invalidation qua
+     * event). Key = productId.
+     */
+    public static final String STOCK_CHANGED = "stock.changed";
+
     // ---- Saga: thanh toán ---------------------------------------------------
 
     /** order-service → payment-service: lệnh thu tiền cho đơn đã giữ được hàng. */

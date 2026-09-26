@@ -100,6 +100,12 @@ orderflow:
       interval: PT30S
       batch-size: 100
 
+    cache:
+      # Cache-aside cho GET /stock/{productId} (pattern 6). Cache bị XOÁ theo event
+      # stock.changed mỗi khi tồn kho đổi; TTL chỉ là giới hạn trên cho độ cũ trong
+      # cuộc đua "đọc DB cũ → xoá → ghi cache cũ" (xem RedisStockCacheAdapter).
+      stock-ttl: PT60S
+
     lock:
       # Chờ tối đa để lấy khoá. Hết thời gian thì ném lỗi cho client thử lại,
       # KHÔNG chờ vô hạn — chờ vô hạn làm cạn thread pool và sập cả service.
