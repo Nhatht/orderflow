@@ -70,6 +70,12 @@ class GatewayIT {
         // Xô nhỏ để test thấy 429 nhanh: tối đa 3 request dồn, đổ lại 1 token/giây.
         registry.add("orderflow.gateway.rate-limit.replenish-rate", () -> "1");
         registry.add("orderflow.gateway.rate-limit.burst-capacity", () -> "3");
+        // Người dùng riêng cho test catalog: xô rate limit tính THEO NGƯỜI DÙNG, và
+        // alice đã tiêu 3 token ở các test khác (đúng bằng burstCapacity) — thêm một
+        // request của alice trong cùng giây là dính 429, tuỳ thứ tự JUnit chạy test.
+        // Map được gộp từ nhiều nguồn: alice/bob trong application.yml vẫn còn.
+        registry.add("orderflow.gateway.demo-users.carol.password", () -> "carol123");
+        registry.add("orderflow.gateway.demo-users.carol.customer-id", () -> "c0ffee00-0000-0000-0000-0000000ca201");
     }
 
     @Autowired WebTestClient client;
@@ -144,6 +150,22 @@ class GatewayIT {
         client.get().uri("/actuator/gateway/routes").header("Authorization", "Bearer " + token)
                 .exchange().expectStatus().isNotFound();
         client.post().uri("/actuator/gateway/refresh").header("Authorization", "Bearer " + token)
+                .exchange().expectStatus().isNotFound();
+    }
+
+    @Test
+    @DisplayName("Catalog (tuần 10): GET /api/inventory/products qua được khi có token; không token → 401; POST → 404")
+    void productCatalogIsReadOnlyAndAuthenticated() {
+        client.get().uri("/api/inventory/products").exchange().expectStatus().isUnauthorized();
+
+        String token = login("carol", "carol123");
+        client.get().uri("/api/inventory/products").header("Authorization", "Bearer " + token)
+                .exchange().expectStatus().isOk();
+
+        client.post().uri("/api/inventory/products").header("Authorization", "Bearer " + token)
+                .bodyValue("{}").exchange().expectStatus().isNotFound();
+        // Khớp chính xác: đường con không tự động lọt ra ngoài.
+        client.get().uri("/api/inventory/products/anything").header("Authorization", "Bearer " + token)
                 .exchange().expectStatus().isNotFound();
     }
 

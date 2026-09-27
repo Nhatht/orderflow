@@ -32,13 +32,15 @@ spring:
           uri: ${ORDER_SERVICE_URL:http://localhost:8081}
           predicates:
             - Path=/api/orders/**
-        # CHỈ đọc tồn kho. /api/inventory/reservations/** là lệnh nội bộ của
-        # saga (giữ/nhả/chốt hàng) — mở ra ngoài thì một khách có token cũng giữ
-        # sạch kho bằng orderId bịa, hoặc nhả phiếu của người khác.
+        # CHỈ đọc tồn kho và catalog. /api/inventory/reservations/** là lệnh nội
+        # bộ của saga (giữ/nhả/chốt hàng) — mở ra ngoài thì một khách có token
+        # cũng giữ sạch kho bằng orderId bịa, hoặc nhả phiếu của người khác.
+        # /products (tuần 10) khớp CHÍNH XÁC, không có /** — thêm đường con nào
+        # dưới đó sau này phải mở tường minh ở đây.
         - id: inventory-service
           uri: ${INVENTORY_SERVICE_URL:http://localhost:8082}
           predicates:
-            - Path=/api/inventory/stock/**
+            - Path=/api/inventory/stock/**,/api/inventory/products
             - Method=GET
         # KHÔNG có route tới payment-service. API của nó chỉ để gỡ lỗi, và nó
         # không lưu customerId nên không kiểm được ai là chủ khoản thanh toán —

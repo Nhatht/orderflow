@@ -2,8 +2,10 @@ package com.orderflow.inventory.adapter.in.web;
 
 import com.orderflow.inventory.adapter.in.web.request.ReserveStockRequest;
 import com.orderflow.inventory.application.dto.ReservationView;
+import com.orderflow.inventory.application.dto.ProductView;
 import com.orderflow.inventory.application.dto.StockView;
 import com.orderflow.inventory.application.port.in.GetStockQuery;
+import com.orderflow.inventory.application.port.in.ListProductsQuery;
 import com.orderflow.inventory.application.port.in.ReserveStockUseCase;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -12,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -28,6 +31,7 @@ public class InventoryController {
 
     private final ReserveStockUseCase reserveStockUseCase;
     private final GetStockQuery getStockQuery;
+    private final ListProductsQuery listProductsQuery;
 
     @PostMapping("/reservations")
     @ResponseStatus(HttpStatus.CREATED)
@@ -60,5 +64,14 @@ public class InventoryController {
                         + "distinguish a genuine stock-out from stock held by another order.")
     public StockView getStock(@PathVariable UUID productId) {
         return getStockQuery.getByProductId(productId);
+    }
+
+    @GetMapping("/products")
+    @Operation(
+            summary = "List products for the catalog",
+            description = "Every product with its price and the quantity still available to buy. "
+                        + "Not cached: availability changes on every reservation.")
+    public List<ProductView> listProducts() {
+        return listProductsQuery.listProducts();
     }
 }
