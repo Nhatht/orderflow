@@ -11,6 +11,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.util.List;
 
@@ -89,8 +90,36 @@ public class GlobalExceptionHandler {
                 .body(ErrorResponse.of(400, "INVALID_ARGUMENT", ex.getMessage()));
     }
 
+    /**
+     * Tham số trên URL sai kiểu: {@code GET /api/orders/abc} ({@code orderId} phải là
+     * UUID), {@code ?customerId=abc}. Lỗi của client → 400, không phải 500.
+     *
+     * <p>Không có handler này thì Spring bọc {@code IllegalArgumentException} của
+     * {@code UUID.fromString} trong {@code MethodArgumentTypeMismatchException},
+     * handler {@code IllegalArgumentException} ở trên KHÔNG bắt được, và lỗi rơi
+     * xuống nhánh 500. Không lặp lại giá trị client gửi trong thông điệp.
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        Class<?> required = ex.getRequiredType();
+        String expected = required == null ? "value" : required.getSimpleName();
+        return ResponseEntity.badRequest()
+                .body(ErrorResponse.of(400, "INVALID_PARAMETER",
+                        "Parameter '%s' must be a valid %s".formatted(ex.getName(), expected)));
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleUnexpected(Exception ex) {
+        // Lỗi chuẩn của Spring MVC (route không tồn tại → 404, sai method → 405,
+        // thiếu tham số → 400...) tự mang sẵn mã HTTP đúng. Nhánh bắt-tất-cả này
+        // không được biến chúng thành 500.
+        if (ex instanceof org.springframework.web.ErrorResponse framework) {
+            int status = framework.getStatusCode().value();
+            HttpStatus known = HttpStatus.resolve(status);
+            String code = known != null ? known.name() : "HTTP_" + status;
+            String message = known != null ? known.getReasonPhrase() : "Request failed";
+            return ResponseEntity.status(status).body(ErrorResponse.of(status, code, message));
+        }
         log.error("Unhandled exception", ex);   // log đầy đủ ở server
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ErrorResponse.of(500, "INTERNAL_ERROR",

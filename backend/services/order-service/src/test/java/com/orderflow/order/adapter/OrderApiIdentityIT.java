@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -93,6 +94,35 @@ class OrderApiIdentityIT extends AbstractOrderIT {
                 .andExpect(status().isNotFound());
         mvc.perform(get("/api/orders/{id}/saga", orderId).header("X-Customer-Id", owner))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("orderId không phải UUID → 400 INVALID_PARAMETER (trước đây rơi xuống 500)")
+    void nonUuidOrderIdIsBadRequest() throws Exception {
+        UUID customer = UUID.randomUUID();
+
+        for (String path : new String[]{"/api/orders/not-a-uuid", "/api/orders/not-a-uuid/saga"}) {
+            MvcResult result = mvc.perform(get(path).header("X-Customer-Id", customer))
+                    .andExpect(status().isBadRequest()).andReturn();
+            JsonNode error = json(result);
+            assertThat(error.get("status").asInt()).isEqualTo(400);
+            assertThat(error.get("code").asText()).isEqualTo("INVALID_PARAMETER");
+            assertThat(error.get("message").asText()).contains("orderId").doesNotContain("not-a-uuid");
+        }
+
+        mvc.perform(get("/api/orders").param("customerId", "abc"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("Lỗi chuẩn của Spring MVC giữ đúng mã HTTP: route lạ → 404, sai method → 405, không phải 500")
+    void frameworkErrorsKeepTheirStatus() throws Exception {
+        MvcResult notFound = mvc.perform(get("/api/orders/{id}/no-such-thing", UUID.randomUUID()))
+                .andExpect(status().isNotFound()).andReturn();
+        assertThat(json(notFound).get("code").asText()).isEqualTo("NOT_FOUND");
+
+        mvc.perform(delete("/api/orders/{id}", UUID.randomUUID()))
+                .andExpect(status().isMethodNotAllowed());
     }
 
     @Test
