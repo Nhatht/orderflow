@@ -1,0 +1,139 @@
+# Chạy TOÀN BỘ OrderFlow bằng một lệnh, ở thư mục gốc repo:
+#
+#   docker compose up --build        # lần đầu ~5-10 phút (tải image + build Maven/npm)
+#
+# Mở http://localhost:3000 (alice / alice123). Tắt: docker compose down  (thêm -v để xoá dữ liệu).
+#
+# Hai cách chạy, không lẫn nhau:
+# - File này: hạ tầng + 5 service + frontend đều trong Docker (người clone repo, CI).
+# - Khi code: chỉ bật hạ tầng `docker compose -f infra/docker/docker-compose.yml up -d`,
+#   chạy service từ IntelliJ/`java -jar` và frontend bằng `npm run dev`.
+#   Hai cách dùng chung cổng 8080-8083: tắt cái này trước khi bật cái kia.
+#
+# Cấu hình: application.yml của service trỏ localhost (cho cách chạy thứ hai). Ở đây ghi đè
+# bằng biến môi trường (Spring relaxed binding: SPRING_DATASOURCE_URL = spring.datasource.url),
+# nên không cần profile Docker riêng hay sửa code.
+#
+# Image: mặc định build tại chỗ, tên orderflow/<service>:local. Dùng image CD đã đẩy lên GHCR:
+#   ORDERFLOW_REGISTRY=ghcr.io/nhatht/orderflow ORDERFLOW_TAG=latest docker compose pull
+#   ORDERFLOW_REGISTRY=ghcr.io/nhatht/orderflow ORDERFLOW_TAG=latest docker compose up --no-build
+
+name: orderflow
+
+include:
+  - infra/docker/docker-compose.yml
+
+x-java-service: &java-service
+  restart: unless-stopped
+  environment: &java-env
+    SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092   # listener INTERNAL, không phải localhost:29092
+    OTLP_TRACING_ENDPOINT: http://jaeger:4318/v1/traces
+  deploy:
+    resources:
+      limits:
+        memory: 768m
+
+# Healthcheck HTTP qua actuator (wget có sẵn trong image alpine).
+x-health: &health
+  interval: 10s
+  timeout: 5s
+  retries: 12
+  start_period: 40s
+
+services:
+  order-service:
+    <<: *java-service
+    image: ${ORDERFLOW_REGISTRY:-orderflow}/order-service:${ORDERFLOW_TAG:-local}
+    build:
+      context: backend
+      args: { SERVICE: order-service }
+    ports: ["8081:8081"]   # Swagger UI: http://localhost:8081/swagger-ui.html
+    environment:
+      <<: *java-env
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-order:5432/order_db
+    healthcheck:
+      <<: *health
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/actuator/health"]
+    depends_on:
+      kafka: { condition: service_healthy }
+      postgres-order: { condition: service_healthy }
+
+  inventory-service:
+    <<: *java-service
+    image: ${ORDERFLOW_REGISTRY:-orderflow}/inventory-service:${ORDERFLOW_TAG:-local}
+    build:
+      context: backend
+      args: { SERVICE: inventory-service }
+    ports: ["8082:8082"]
+    environment:
+      <<: *java-env
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-inventory:5432/inventory_db
+      SPRING_DATA_REDIS_HOST: redis
+    healthcheck:
+      <<: *health
+      test: ["CMD", "wget", "-qO-", "http://localhost:8082/actuator/health"]
+    depends_on:
+      kafka: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      postgres-inventory: { condition: service_healthy }
+
+  payment-service:
+    <<: *java-service
+    image: ${ORDERFLOW_REGISTRY:-orderflow}/payment-service:${ORDERFLOW_TAG:-local}
+    build:
+      context: backend
+      args: { SERVICE: payment-service }
+    ports: ["8083:8083"]
+    environment:
+      <<: *java-env
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-payment:5432/payment_db
+    healthcheck:
+      <<: *health
+      test: ["CMD", "wget", "-qO-", "http://localhost:8083/actuator/health"]
+    depends_on:
+      kafka: { condition: service_healthy }
+      postgres-payment: { condition: service_healthy }
+
+  # Không có web server (chỉ nghe Kafka), nên không có healthcheck HTTP.
+  notification-service:
+    <<: *java-service
+    image: ${ORDERFLOW_REGISTRY:-orderflow}/notification-service:${ORDERFLOW_TAG:-local}
+    build:
+      context: backend
+      args: { SERVICE: notification-service }
+    environment:
+      <<: *java-env
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-notification:5432/notification_db
+      SPRING_MAIL_HOST: mailhog
+    depends_on:
+      kafka: { condition: service_healthy }
+      postgres-notification: { condition: service_healthy }
+
+  api-gateway:
+    <<: *java-service
+    image: ${ORDERFLOW_REGISTRY:-orderflow}/api-gateway:${ORDERFLOW_TAG:-local}
+    build:
+      context: backend
+      args: { SERVICE: api-gateway }
+    ports: ["8080:8080"]
+    environment:
+      OTLP_TRACING_ENDPOINT: http://jaeger:4318/v1/traces
+      SPRING_DATA_REDIS_HOST: redis
+      ORDER_SERVICE_URL: http://order-service:8081
+      INVENTORY_SERVICE_URL: http://inventory-service:8082
+    healthcheck:
+      <<: *health
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health"]
+    depends_on:
+      redis: { condition: service_healthy }
+      order-service: { condition: service_healthy }
+      inventory-service: { condition: service_healthy }
+
+  frontend:
+    image: ${ORDERFLOW_REGISTRY:-orderflow}/frontend:${ORDERFLOW_TAG:-local}
+    build:
+      context: frontend
+    restart: unless-stopped
+    ports: ["3000:80"]
+    depends_on:
+      api-gateway: { condition: service_healthy }
