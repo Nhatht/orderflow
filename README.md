@@ -1,12 +1,12 @@
 # OrderFlow
 
-[![backend-ci](https://github.com/Nhatht/orderflow/actions/workflows/backend-ci.yml/badge.svg)](https://github.com/Nhatht/orderflow/actions/workflows/backend-ci.yml)
+[![ci](https://github.com/Nhatht/orderflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Nhatht/orderflow/actions/workflows/ci.yml)
 
 > Event-driven order processing platform built with Java 21, Spring Boot 3 and Apache Kafka.
 
 Distributed order processing across four services, coordinated by a Saga orchestrator with compensating transactions. Built to explore the hard parts of distributed systems — reliable event delivery, idempotency, concurrency control, timeouts and tracing — rather than to maximise feature count.
 
-> ⚠️ **Work in progress.** Backend complete (weeks 1–8); frontend not started yet.
+> **Try it in one command:** `docker compose up --build`, then open http://localhost:3000 ([details](#getting-started)).
 
 ---
 
@@ -14,9 +14,9 @@ Distributed order processing across four services, coordinated by a Saga orchest
 
 ```mermaid
 flowchart TB
-    client[Client] -->|JWT| gw[API Gateway<br/>auth · rate limit · identity · correlation id]
+    client[React frontend] -->|JWT| gw[API Gateway<br/>auth · rate limit · identity · correlation id]
     gw --> order[Order Service<br/>saga orchestrator]
-    gw -->|GET stock only| inv[Inventory Service<br/>Redis lock · cache]
+    gw -->|GET stock + catalog only| inv[Inventory Service<br/>Redis lock · cache]
     order <-->|events| kafka[(Kafka)]
     inv <-->|events| kafka
     pay[Payment Service<br/>idempotency key] <-->|events| kafka
@@ -106,7 +106,48 @@ The saga owns the only clock that matters (3 min). Stock reservations expire aft
 
 ## Getting started
 
-Requires JDK 21, Maven 3.9+, Docker.
+### Run everything with one command
+
+Requires only Docker (Docker Desktop, or Docker Engine with Compose v2.20+).
+
+```bash
+git clone https://github.com/Nhatht/orderflow.git && cd orderflow
+docker compose up --build        # first run: a few minutes to download images and build
+```
+
+Open **http://localhost:3000** and sign in as `alice` / `alice123`. This starts the infrastructure, the five services and
+the frontend (15 containers); stop with `docker compose down` (add `-v` to wipe the data).
+
+Check that the whole system works end to end (places a real order that completes and one that is compensated;
+needs nothing installed on the host):
+
+```bash
+docker run --rm --network orderflow_default -v "$PWD/scripts:/scripts:ro" alpine:3.20 \
+  sh -c "apk add -q bash curl jq && BASE_URL=http://api-gateway:8080 bash /scripts/smoke-test.sh"
+```
+
+Prebuilt images are published to GitHub Container Registry on every green build of `main`, so you can skip the build:
+
+```bash
+export ORDERFLOW_REGISTRY=ghcr.io/nhatht/orderflow ORDERFLOW_TAG=latest
+docker compose pull && docker compose up --no-build
+```
+
+### CI/CD
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and pull request:
+
+| Job | What it proves |
+|---|---|
+| `backend` | `mvn verify`: every unit and integration test, against real Kafka / PostgreSQL / Redis via Testcontainers |
+| `frontend` | TypeScript typecheck and production build |
+| `e2e` | `docker compose up` of the whole system, then [`scripts/smoke-test.sh`](scripts/smoke-test.sh) places real orders through the gateway and through the frontend's nginx |
+| `publish` | only on `main` after the three above pass: pushes the six images to `ghcr.io` |
+
+### Development setup
+
+For working on the code: infrastructure in Docker, services from the IDE or `java -jar`, frontend with Vite.
+Requires JDK 21, Maven 3.9+, Node 22, Docker. Stop the Docker stack above first: both use ports 8080-8083.
 
 ```bash
 # 1. Infrastructure: Kafka, Redis, PostgreSQL ×4, Jaeger, MailHog, Kafka UI
@@ -140,6 +181,7 @@ curl localhost:8080/api/orders/<orderId>/saga -H "Authorization: Bearer $TOKEN"
 
 | Service | URL |
 |---|---|
+| Frontend | http://localhost:3000 (Docker) · http://localhost:5173 (`npm run dev`) |
 | API Gateway | http://localhost:8080 |
 | Jaeger (traces) | http://localhost:16686 |
 | MailHog (emails) | http://localhost:8025 |
@@ -147,6 +189,66 @@ curl localhost:8080/api/orders/<orderId>/saga -H "Authorization: Bearer $TOKEN"
 | Swagger UI (direct, not via gateway) | http://localhost:8081/swagger-ui.html · :8082 · :8083 |
 
 Every log line carries `[service,traceId,spanId,correlationId]` — paste the `traceId` into Jaeger to see the whole request: one order produces a single trace of ~57 spans across all five services, including the outbox relays.
+
+## Frontend
+
+React 18 + TypeScript + Vite, TanStack Query (server state), Zustand (client state), Tailwind CSS.
+Pages: sign in, catalog, cart and checkout, order list, and **order detail with a live saga timeline**.
+
+```bash
+# backend running as above (gateway on :8080)
+cd frontend
+npm install
+npm run dev          # http://localhost:5173, proxies /api and /auth to the gateway (no CORS needed in dev)
+npm run typecheck
+```
+
+After checkout the app opens the new order and follows its saga while it runs. The page polls
+`GET /api/orders/{id}/saga` once a second and stops as soon as the saga reaches a final state
+(`COMPLETED`, `COMPENSATED` or `FAILED`).
+
+To see compensation from the UI, add **Trà atiso Đà Lạt** (30.099 ₫) to the cart: every total whose integer part
+ends in 99 is declined by the simulated payment gateway, so the stock already reserved is released again.
+
+### Reading the saga timeline
+
+The UI is in Vietnamese. The words that matter:
+
+| On screen | Meaning | Saga step / status |
+|---|---|---|
+| Giữ hàng | Reserve stock | `RESERVE_STOCK` (inventory-service) |
+| Thu tiền | Charge the card | `PROCESS_PAYMENT` (payment-service) |
+| Xác nhận đơn | Confirm the order | `CONFIRM_ORDER` (order-service) |
+| Nhả hàng về kho · Đền bù | Release stock, a compensating step | `RELEASE_STOCK` (inventory-service) |
+| Hoàn tất / Đã đền bù / Thất bại | Completed / Compensated / Failed | saga status |
+| Đã xác nhận / Đã huỷ | Confirmed / Cancelled | order status |
+| Gửi lệnh … phản hồi sau … ms | Command sent at … , reply received … ms later | one Kafka round trip |
+
+**Card declined, saga `COMPENSATED`.** The order page shows this timeline (text copy of one real run):
+
+```text
+Order #2e479a3f   Đã huỷ (cancelled)                         30.099 ₫
+Saga  Đã đền bù (compensated)                        finished after 1,54 s
+Reason: CARD_DECLINED
+
+ +2 ms    ✓ Giữ hàng        inventory-service   succeeded      reply after 525 ms
+ +527 ms  ✗ Thu tiền        payment-service     card declined  reply after 666 ms
+ +1,19 s  ↺ Nhả hàng về kho inventory-service   Đền bù         reply after 348 ms
+```
+
+- **Total** comes from the server (`BigDecimal`); the browser never adds money up.
+- **Left column**: time since the saga started. Steps are not simultaneous; each one waits for the previous reply to
+  come back over Kafka (command → outbox → Kafka → other service → outbox → Kafka → orchestrator).
+- **Reply after … ms**: how long the other service took to answer that command.
+- **The amber step** (*Nhả hàng về kho · Đền bù*) is the compensating action: stock reserved in the first step goes back,
+  so inventory before = inventory after. There is no rollback across services; this step is the rollback.
+
+**Card accepted, saga `COMPLETED`**: *Giữ hàng* → *Thu tiền* → *Xác nhận đơn*, all green, 1,21 s end to end.
+
+**Out of stock, saga `FAILED`**: the reservation is refused (`INSUFFICIENT_STOCK`), so nothing was reserved or charged and
+there is nothing to compensate. Compare with the declined card: compensation only runs for steps that succeeded.
+
+Timings are from single runs on a development machine, shown to illustrate the flow, not as benchmarks.
 
 ## Tests
 
